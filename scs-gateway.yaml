@@ -1,0 +1,44 @@
+esphome:
+  name: scs-gateway
+  friendly_name: SCS Gateway
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: esp-idf
+
+logger:
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: "example"
+  password: "example-password"
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [scs_bus]
+
+scs_bus:
+  id: scs
+  rx_pin: GPIO4
+  tx_pin: GPIO5
+
+binary_sensor:
+  - platform: scs_bus
+    scs_bus_id: scs
+    name: Entrance Doorbell
+    address: 0
+    function: doorbell
+
+button:
+  - platform: scs_bus
+    scs_bus_id: scs
+    name: Open Entrance Door
+    address: 0
+    command: door_unlock
