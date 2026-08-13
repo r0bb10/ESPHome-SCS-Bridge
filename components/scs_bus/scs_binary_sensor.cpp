@@ -9,7 +9,10 @@ void ScsBinarySensor::setup() {
     return;
   }
   if (function_ == DOORBELL) {
-    bus_->add_doorbell_listener(address_, [this]() { publish_state(true); });
+    bus_->add_doorbell_listener(address_, [this]() {
+      publish_state(true);
+      set_timeout("doorbell_release", 500, [this]() { publish_state(false); });
+    });
   }
 }
 

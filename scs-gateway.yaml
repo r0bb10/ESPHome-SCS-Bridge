@@ -1,6 +1,9 @@
 esphome:
   name: scs-gateway
   friendly_name: SCS Gateway
+  devices:
+    - id: entrance
+      name: Entrance
 
 esp32:
   board: esp32-c3-devkitm-1
@@ -28,10 +31,14 @@ scs_bus:
   id: scs
   rx_pin: GPIO4
   tx_pin: GPIO5
+  on_frame:
+    then:
+      - logger.log: "Received native SCS frame"
 
 binary_sensor:
   - platform: scs_bus
     scs_bus_id: scs
+    device_id: entrance
     name: Entrance Doorbell
     address: 0
     function: doorbell
@@ -39,6 +46,7 @@ binary_sensor:
 button:
   - platform: scs_bus
     scs_bus_id: scs
+    device_id: entrance
     name: Open Entrance Door
     address: 0
     command: door_unlock
