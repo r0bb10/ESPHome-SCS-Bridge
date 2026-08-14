@@ -7,8 +7,18 @@ namespace esphome {
 namespace scs_bus {
 
 static const char *const TAG = "scs_bus";
-static constexpr size_t MAX_TRANSMIT_QUEUE = 8;
-static constexpr uint32_t BUS_IDLE_GUARD_MS = 2;
+class TransportDriver final : public ScsLink::Driver {
+ public:
+  explicit TransportDriver(ScsTransport &transport) : transport_(transport) {}
+  bool can_transmit() const override { return transport_.can_transmit(); }
+  uint32_t last_bus_activity_us() const override { return transport_.last_bus_activity_us(); }
+  bool transmit(const ScsFrame &frame, uint32_t id) override {
+    return transport_.transmit(frame.bytes, frame.size(), id) == ESP_OK;
+  }
+  void cancel() override { transport_.cancel_transmit(); }
+ private:
+  ScsTransport &transport_;
+};
 
 void ScsBus::setup() {
   if (rx_pin_ < 0 || tx_pin_ < 0) {
@@ -16,33 +26,36 @@ void ScsBus::setup() {
     mark_failed();
     return;
   }
-
-  rmt_.set_receive_callback(&ScsBus::on_byte_, this);
-  rmt_.set_transmit_done_callback(&ScsBus::on_transmit_done_, this);
-  const esp_err_t err = rmt_.setup(rx_pin_, tx_pin_, rx_inverted_, tx_inverted_);
+  const esp_err_t err = transport_.setup(rx_pin_, tx_pin_, rx_inverted_, tx_inverted_);
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to initialize RMT: %s", esp_err_to_name(err));
+    ESP_LOGE(TAG, "Failed to initialize SCS transport: %s", esp_err_to_name(err));
     mark_failed();
+    return;
   }
+  command_queue_ = xQueueCreate(8, sizeof(CommandRequest));
+  frame_queue_ = xQueueCreate(16, sizeof(ScsFrame));
+  if (command_queue_ == nullptr || frame_queue_ == nullptr ||
+      xTaskCreate(&ScsBus::tx_task_, "scs_tx", 4096, this, configMAX_PRIORITIES - 1, &tx_task_handle_) != pdPASS) {
+    ESP_LOGE(TAG, "Failed to create SCS TX coordinator task");
+    mark_failed();
+    return;
+  }
+  transport_.set_event_task(tx_task_handle_);
 }
 
 void ScsBus::loop() {
   if (is_failed())
     return;
-
-  rmt_.loop();
-  if (awaiting_ack_ && millis() >= ack_deadline_)
-    fail_or_retry_();
-  if (!active_tx_valid_)
-    start_next_transmission_();
+  ScsFrame frame;
+  while (xQueueReceive(frame_queue_, &frame, 0) == pdTRUE)
+    handle_frame_(frame);
 }
 
 void ScsBus::dump_config() {
   ESP_LOGCONFIG(TAG, "SCS Bus:");
   ESP_LOGCONFIG(TAG, "  RX Pin: GPIO%d%s", rx_pin_, rx_inverted_ ? " (inverted)" : "");
   ESP_LOGCONFIG(TAG, "  TX Pin: GPIO%d%s", tx_pin_, tx_inverted_ ? " (inverted)" : "");
-  ESP_LOGCONFIG(TAG, "  ACK timeout: %lu ms", static_cast<unsigned long>(ack_timeout_ms_));
-  ESP_LOGCONFIG(TAG, "  Max retries: %u", max_retries_);
+  ESP_LOGCONFIG(TAG, "  OEM ACK timeout: %lu us", static_cast<unsigned long>(ScsLink::ack_wait_us()));
 }
 
 void ScsBus::add_doorbell_listener(uint8_t address, std::function<void()> &&callback) {
@@ -56,48 +69,67 @@ bool ScsBus::send_door_unlock(uint8_t address) {
   ScsFrame frame;
   if (!scs_build_door_unlock(DoorUnlock{address}, frame))
     return false;
-  if (transmit_queue_.size() >= MAX_TRANSMIT_QUEUE) {
+  const CommandRequest request{frame, ScsLink::Mode::ACK};
+  if (command_queue_ == nullptr || xQueueSend(command_queue_, &request, 0) != pdTRUE) {
     queue_overflows_++;
     ESP_LOGW(TAG, "Transmit queue full; dropping door unlock for address 0x%02X", address);
     return false;
   }
-  transmit_queue_.push_back(PendingTx{frame, 0});
+  xTaskNotifyGive(tx_task_handle_);
   return true;
 }
 
-void ScsBus::on_byte_(void *context, uint8_t byte) { static_cast<ScsBus *>(context)->handle_byte_(byte); }
+void ScsBus::tx_task_(void *context) { static_cast<ScsBus *>(context)->run_tx_task_(); }
 
-void ScsBus::on_transmit_done_(void *context) {
-  auto *bus = static_cast<ScsBus *>(context);
-  if (!bus->active_tx_valid_)
-    return;
-  bus->awaiting_ack_ = true;
-  bus->ack_deadline_ = millis() + bus->ack_timeout_ms_;
+void ScsBus::run_tx_task_() {
+  TransportDriver driver(transport_);
+  for (;;) {
+    CommandRequest request;
+    while (xQueueReceive(command_queue_, &request, 0) == pdTRUE) {
+      if (!link_.enqueue(request.frame, request.mode))
+        queue_overflows_++;
+    }
+    ScsTransport::RxEvent event;
+    while (transport_.take_rx_event(&event))
+      handle_rx_in_task_(event);
+    uint32_t transaction_id;
+    uint32_t completed_at_us;
+    while (transport_.take_transmit_done(&transaction_id, &completed_at_us))
+      link_.on_transmit_done(transaction_id, completed_at_us);
+    if (transport_.take_collision()) {
+      collisions_++;
+      link_.on_collision(driver, micros());
+    }
+    const uint32_t now_us = micros();
+    link_.run(driver, now_us);
+    uint32_t wake_at_us;
+    if (link_.next_wakeup_us(&wake_at_us))
+      transport_.arm_event_task_in(static_cast<uint32_t>(wake_at_us - now_us));
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+  }
 }
 
-void ScsBus::handle_byte_(uint8_t byte) {
-  last_bus_activity_ms_ = millis();
+void ScsBus::handle_rx_in_task_(const ScsTransport::RxEvent &event) {
   ScsFrame frame;
-  const ScsParseResult result = assembler_.push(byte, frame);
+  const ScsParseResult result = tx_assembler_.push(event.byte, frame);
   if (result == ScsParseResult::INVALID) {
     invalid_frames_++;
     ESP_LOGW(TAG, "Dropped invalid native SCS frame");
-    return;
+  } else if (result == ScsParseResult::FRAME) {
+    if (frame.is_ack())
+      link_.on_ack(event.timestamp_us);
+    else {
+      if (is_addressed_(frame))
+        link_.note_responder_ack();
+      if (xQueueSend(frame_queue_, &frame, 0) != pdTRUE)
+        queue_overflows_++;
+    }
   }
-  if (result == ScsParseResult::FRAME)
-    handle_frame_(frame);
 }
 
 void ScsBus::handle_frame_(const ScsFrame &frame) {
-  if (frame.is_ack()) {
-    if (awaiting_ack_) {
-      awaiting_ack_ = false;
-      active_tx_valid_ = false;
-      ESP_LOGD(TAG, "Received native SCS ACK");
-    }
+  if (frame.is_ack())
     return;
-  }
-
   received_frames_++;
   publish_frame_(frame);
   DoorbellEvent event;
@@ -107,33 +139,19 @@ void ScsBus::handle_frame_(const ScsFrame &frame) {
   }
 }
 
-void ScsBus::start_next_transmission_() {
-  if (rmt_.transmitting() || transmit_queue_.empty() || millis() - last_bus_activity_ms_ < BUS_IDLE_GUARD_MS)
-    return;
 
-  active_tx_ = transmit_queue_.front();
-  transmit_queue_.erase(transmit_queue_.begin());
-  active_tx_valid_ = true;
-  active_tx_.attempts++;
-  const esp_err_t err = rmt_.transmit(active_tx_.frame.bytes, active_tx_.frame.size());
-  if (err != ESP_OK) {
-    ESP_LOGW(TAG, "Could not transmit native SCS frame: %s", esp_err_to_name(err));
-    fail_or_retry_();
-  }
+bool ScsBus::is_addressed_(const ScsFrame &frame) const {
+  if (local_system_ == 0 || !frame.is_valid() || frame.is_ack())
+    return false;
+  const uint8_t *payload = frame.payload();
+  if ((payload[2] & 0xF0U) != static_cast<uint8_t>(local_system_ << 4U))
+    return false;
+  if (local_system_ == 1 || local_system_ == 4)
+    return static_cast<uint8_t>(local_address_) == payload[0];
+  return (payload[0] & 0xF0U) == 0x80U &&
+         local_address_ == static_cast<uint16_t>(((payload[2] & 0x0FU) << 8U) | payload[1]);
 }
 
-void ScsBus::fail_or_retry_() {
-  awaiting_ack_ = false;
-  ack_timeouts_++;
-  if (active_tx_.attempts <= max_retries_) {
-    retries_++;
-    ESP_LOGW(TAG, "SCS ACK timeout; retrying (%u/%u)", active_tx_.attempts, max_retries_);
-    transmit_queue_.insert(transmit_queue_.begin(), active_tx_);
-  } else {
-    ESP_LOGW(TAG, "SCS ACK timeout; command failed after %u attempts", active_tx_.attempts);
-  }
-  active_tx_valid_ = false;
-}
 
 void ScsBus::publish_frame_(const ScsFrame &frame) {
   std::vector<uint8_t> bytes(frame.bytes, frame.bytes + frame.size());

@@ -13,8 +13,8 @@ MULTI_CONF = True
 
 CONF_RX_INVERTED = "rx_inverted"
 CONF_TX_INVERTED = "tx_inverted"
-CONF_ACK_TIMEOUT = "ack_timeout"
-CONF_MAX_RETRIES = "max_retries"
+CONF_LOCAL_SYSTEM = "local_system"
+CONF_LOCAL_ADDRESS = "local_address"
 CONF_ON_FRAME = "on_frame"
 
 scs_bus_ns = cg.esphome_ns.namespace("scs_bus")
@@ -28,10 +28,8 @@ CONFIG_SCHEMA = cv.All(
             cv.Required(CONF_TX_PIN): pins.internal_gpio_output_pin_number,
             cv.Optional(CONF_RX_INVERTED, default=False): cv.boolean,
             cv.Optional(CONF_TX_INVERTED, default=False): cv.boolean,
-            cv.Optional(
-                CONF_ACK_TIMEOUT, default="100ms"
-            ): cv.positive_time_period_milliseconds,
-            cv.Optional(CONF_MAX_RETRIES, default=3): cv.int_range(min=0, max=255),
+            cv.Optional(CONF_LOCAL_SYSTEM): cv.int_range(min=1, max=15),
+            cv.Optional(CONF_LOCAL_ADDRESS): cv.int_range(min=0, max=0xFFFF),
             cv.Optional(CONF_ON_FRAME): automation.validate_automation({}),
         }
     ).extend(cv.COMPONENT_SCHEMA),
@@ -53,13 +51,16 @@ async def to_code(config):
     await cg.register_component(var, config)
 
     # ESPHome excludes this IDF driver unless a component explicitly needs it.
+    include_builtin_idf_component("esp_driver_gpio")
+    include_builtin_idf_component("esp_driver_gptimer")
     include_builtin_idf_component("esp_driver_rmt")
 
     cg.add(var.set_rx_pin(config[CONF_RX_PIN]))
     cg.add(var.set_tx_pin(config[CONF_TX_PIN]))
     cg.add(var.set_rx_inverted(config[CONF_RX_INVERTED]))
     cg.add(var.set_tx_inverted(config[CONF_TX_INVERTED]))
-    cg.add(var.set_ack_timeout(config[CONF_ACK_TIMEOUT].total_milliseconds))
-    cg.add(var.set_max_retries(config[CONF_MAX_RETRIES]))
-
+    if CONF_LOCAL_SYSTEM in config:
+        cg.add(var.set_local_system(config[CONF_LOCAL_SYSTEM]))
+    if CONF_LOCAL_ADDRESS in config:
+        cg.add(var.set_local_address(config[CONF_LOCAL_ADDRESS]))
     await automation.build_callback_automations(var, config, _CALLBACK_AUTOMATIONS)

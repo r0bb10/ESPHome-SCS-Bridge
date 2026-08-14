@@ -49,8 +49,8 @@ enum class ScsParseResult : uint8_t {
   INVALID,
 };
 
-// Stateful byte-stream assembler. A non-terminator seventh byte is treated as
-// an extended frame candidate, matching observed native parser behavior.
+// Stateful byte-stream assembler. The 300EOS receiver selects 11-byte frames
+// from a D* or E* first payload byte; all other payloads use seven bytes.
 class ScsFrameAssembler {
  public:
   ScsParseResult push(uint8_t byte, ScsFrame &frame);
@@ -62,6 +62,7 @@ class ScsFrameAssembler {
 
   uint8_t buffer_[SCS_EXTENDED_FRAME_SIZE]{};
   size_t size_{0};
+  size_t expected_size_{0};
 };
 
 }  // namespace scs_bus

@@ -1,12 +1,18 @@
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <vector>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
 
 #include "esphome/core/component.h"
 #include "scs_codec.h"
 #include "scs_own.h"
-#include "scs_rmt.h"
+#include "scs_transport.h"
+#include "scs_link.h"
 
 namespace esphome {
 namespace scs_bus {
@@ -22,9 +28,8 @@ class ScsBus : public Component {
   void set_tx_pin(int pin) { tx_pin_ = pin; }
   void set_rx_inverted(bool inverted) { rx_inverted_ = inverted; }
   void set_tx_inverted(bool inverted) { tx_inverted_ = inverted; }
-  void set_ack_timeout(uint32_t timeout_ms) { ack_timeout_ms_ = timeout_ms; }
-  void set_max_retries(uint8_t retries) { max_retries_ = retries; }
-
+  void set_local_system(uint8_t system) { local_system_ = system; }
+  void set_local_address(uint16_t address) { local_address_ = address; }
   void add_on_frame_callback(std::function<void(std::vector<uint8_t>)> &&callback) {
     on_frame_callbacks_.add(std::move(callback));
   }
@@ -32,40 +37,32 @@ class ScsBus : public Component {
   bool send_door_unlock(uint8_t address);
 
  protected:
-  struct PendingTx {
-    ScsFrame frame;
-    uint8_t attempts{0};
-  };
-
-  static void on_byte_(void *context, uint8_t byte);
-  static void on_transmit_done_(void *context);
-  void handle_byte_(uint8_t byte);
+  struct CommandRequest { ScsFrame frame; ScsLink::Mode mode; };
+  static void tx_task_(void *context);
+  void run_tx_task_();
+  void handle_rx_in_task_(const ScsTransport::RxEvent &event);
   void handle_frame_(const ScsFrame &frame);
-  void start_next_transmission_();
-  void fail_or_retry_();
+  bool is_addressed_(const ScsFrame &frame) const;
   void publish_frame_(const ScsFrame &frame);
 
   int rx_pin_{-1};
   int tx_pin_{-1};
   bool rx_inverted_{false};
   bool tx_inverted_{false};
-  uint32_t ack_timeout_ms_{100};
-  uint8_t max_retries_{3};
-  ScsRmt rmt_;
-  ScsFrameAssembler assembler_;
-  std::vector<PendingTx> transmit_queue_;
-  PendingTx active_tx_{};
-  bool active_tx_valid_{false};
-  bool awaiting_ack_{false};
-  uint32_t ack_deadline_{0};
-  uint32_t last_bus_activity_ms_{0};
+  uint8_t local_system_{0};
+  uint16_t local_address_{0};
+  ScsTransport transport_;
+  ScsFrameAssembler tx_assembler_;
+  ScsLink link_;
+  QueueHandle_t command_queue_{nullptr};
+  QueueHandle_t frame_queue_{nullptr};
+  TaskHandle_t tx_task_handle_{nullptr};
   CallbackManager<void(std::vector<uint8_t>)> on_frame_callbacks_;
   CallbackManager<void(uint8_t)> on_doorbell_callbacks_;
-  uint32_t received_frames_{0};
-  uint32_t invalid_frames_{0};
-  uint32_t ack_timeouts_{0};
-  uint32_t retries_{0};
-  uint32_t queue_overflows_{0};
+  std::atomic<uint32_t> received_frames_{0};
+  std::atomic<uint32_t> invalid_frames_{0};
+  std::atomic<uint32_t> collisions_{0};
+  std::atomic<uint32_t> queue_overflows_{0};
 };
 
 }  // namespace scs_bus

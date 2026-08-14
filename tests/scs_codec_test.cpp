@@ -37,11 +37,19 @@ int main() {
   ScsFrame received = feed(assembler, standard);
   assert(received.type == ScsFrameType::STANDARD && received.is_valid());
 
-  const uint8_t extended_payload[] = {0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80};
+  const uint8_t extended_payload[] = {0xEC, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80};
   ScsFrame extended;
   assert(ScsFrame::build(extended, extended_payload, sizeof(extended_payload)));
   assert(extended.type == ScsFrameType::EXTENDED && extended.size() == 11 && extended.is_valid());
   received = feed(assembler, extended);
+  assert(received.type == ScsFrameType::EXTENDED && received.is_valid());
+
+  // The M4 chooses extended length from a D*/E* first payload byte, not from
+  // whether byte seven happens to be A3.
+  const uint8_t d_extended_payload[] = {0xD2, 0x01, 0x03, 0x02, 0x04, 0x05, 0x06, 0x07};
+  ScsFrame d_extended;
+  assert(ScsFrame::build(d_extended, d_extended_payload, sizeof(d_extended_payload)));
+  received = feed(assembler, d_extended);
   assert(received.type == ScsFrameType::EXTENDED && received.is_valid());
 
   ScsFrame ack = ScsFrame::acknowledgment();
@@ -54,6 +62,12 @@ int main() {
     const ScsParseResult result = assembler.push(corrupt.bytes[index], received);
     assert(index + 1 == corrupt.size() ? result == ScsParseResult::INVALID : result == ScsParseResult::NONE);
   }
+
+  // rx_end does not reject a non-A3 terminator when the native XOR is valid.
+  ScsFrame alternate_terminator = standard;
+  alternate_terminator.bytes[6] = 0x00;
+  received = feed(assembler, alternate_terminator);
+  assert(received.type == ScsFrameType::STANDARD && received.is_valid());
 
   // A later A8 abandons the malformed candidate and starts a fresh frame.
   corrupt = standard;
@@ -68,18 +82,14 @@ int main() {
   }
   assert(received.is_valid() && received.type == ScsFrameType::STANDARD);
 
-  // A non-A3 seventh byte is an extended-frame candidate, not a rejected standard frame.
-  received = feed(assembler, extended);
-  assert(received.type == ScsFrameType::EXTENDED);
-
-  // A malformed extended frame ending in A8 resynchronizes to the next frame.
+  // A malformed extended frame resynchronizes to the next frame.
   ScsFrame malformed = extended;
-  malformed.bytes[10] = 0xA8;
+  malformed.bytes[9] ^= 0x01;
   for (size_t index = 0; index < malformed.size(); ++index) {
     const ScsParseResult result = assembler.push(malformed.bytes[index], received);
-    assert(result == ScsParseResult::NONE);
+    assert(index + 1 == malformed.size() ? result == ScsParseResult::INVALID : result == ScsParseResult::NONE);
   }
-  for (size_t index = 1; index < standard.size(); ++index) {
+  for (size_t index = 0; index < standard.size(); ++index) {
     const ScsParseResult result = assembler.push(standard.bytes[index], received);
     assert(index + 1 == standard.size() ? result == ScsParseResult::FRAME : result == ScsParseResult::NONE);
   }

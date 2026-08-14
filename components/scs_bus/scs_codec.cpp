@@ -52,8 +52,9 @@ bool ScsFrame::is_valid() const {
     return true;
 
   const size_t data_size = payload_size();
-  return data_size != 0 && bytes[0] == SCS_FRAME_START && bytes[1 + data_size] == xor_payload(bytes + 1, data_size) &&
-         bytes[2 + data_size] == SCS_FRAME_END;
+  // The 300EOS RX path checks the start marker and XOR only. Its transmit
+  // path always emits A3, but rx_end does not reject a different final byte.
+  return data_size != 0 && bytes[0] == SCS_FRAME_START && bytes[1 + data_size] == xor_payload(bytes + 1, data_size);
 }
 
 ScsFrame ScsFrame::acknowledgment() {
@@ -95,23 +96,13 @@ ScsParseResult ScsFrameAssembler::push(uint8_t byte, ScsFrame &frame) {
   }
 
   buffer_[size_++] = byte;
-  if (size_ == SCS_STANDARD_FRAME_SIZE && byte == SCS_FRAME_END) {
-    frame.type = ScsFrameType::STANDARD;
-    for (size_t index = 0; index < size_; ++index)
-      frame.bytes[index] = buffer_[index];
-    if (frame.is_valid()) {
-      reset();
-      return ScsParseResult::FRAME;
-    }
-    resynchronize();
-    return ScsParseResult::INVALID;
-  }
-
-  // At seven bytes, any non-A3 byte is payload byte 5 of an extended frame.
-  if (size_ < SCS_EXTENDED_FRAME_SIZE)
+  if (size_ == 2)
+    expected_size_ = (buffer_[1] & 0xF0U) == 0xD0U || (buffer_[1] & 0xF0U) == 0xE0U ?
+                         SCS_EXTENDED_FRAME_SIZE : SCS_STANDARD_FRAME_SIZE;
+  if (size_ < expected_size_)
     return ScsParseResult::NONE;
 
-  frame.type = ScsFrameType::EXTENDED;
+  frame.type = expected_size_ == SCS_EXTENDED_FRAME_SIZE ? ScsFrameType::EXTENDED : ScsFrameType::STANDARD;
   for (size_t index = 0; index < size_; ++index)
     frame.bytes[index] = buffer_[index];
   if (frame.is_valid()) {
@@ -123,11 +114,15 @@ ScsParseResult ScsFrameAssembler::push(uint8_t byte, ScsFrame &frame) {
   return ScsParseResult::INVALID;
 }
 
-void ScsFrameAssembler::reset() { size_ = 0; }
+void ScsFrameAssembler::reset() {
+  size_ = 0;
+  expected_size_ = 0;
+}
 
 void ScsFrameAssembler::begin_frame() {
   buffer_[0] = SCS_FRAME_START;
   size_ = 1;
+  expected_size_ = 0;
 }
 
 void ScsFrameAssembler::resynchronize() {
@@ -146,6 +141,8 @@ void ScsFrameAssembler::resynchronize() {
   for (size_t index = 0; index < remaining; ++index)
     buffer_[index] = buffer_[start + index];
   size_ = remaining;
+  expected_size_ = size_ >= 2 && ((buffer_[1] & 0xF0U) == 0xD0U || (buffer_[1] & 0xF0U) == 0xE0U) ?
+                       SCS_EXTENDED_FRAME_SIZE : size_ >= 2 ? SCS_STANDARD_FRAME_SIZE : 0;
 }
 
 }  // namespace scs_bus
