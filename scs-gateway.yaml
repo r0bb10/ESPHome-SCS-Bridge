@@ -31,9 +31,9 @@ scs_bus:
   id: scs
   rx_pin: GPIO4
   tx_pin: GPIO5
-  on_frame:
-    then:
-      - logger.log: "Received native SCS frame"
+  # off: no traffic logs; telegrams: valid RX/TX telegrams and ACKs;
+  # verbose: also bytes, malformed telegrams, framing errors, and collisions.
+  diagnostics: "off"
 
 binary_sensor:
   - platform: scs_bus

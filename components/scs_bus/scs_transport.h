@@ -24,6 +24,9 @@ class ScsTransport {
   static constexpr size_t MAX_TX_BYTES = 16;
 
   struct RxEvent {
+    enum class Type : uint8_t { BYTE, FRAMING_ERROR };
+
+    Type type;
     uint8_t byte;
     uint32_t timestamp_us;
     uint32_t sequence;
@@ -59,6 +62,7 @@ class ScsTransport {
 
   void schedule_rx_sample_(uint64_t alarm_count);
   void queue_rx_byte_(uint8_t byte);
+  void queue_rx_framing_error_();
   bool queue_rx_event_(const RxEvent &event);
   void flush_echo_prefix_();
   void abort_transmit_from_isr_();

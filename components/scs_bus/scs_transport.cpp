@@ -329,6 +329,7 @@ bool IRAM_ATTR ScsTransport::on_rx_timer_(gptimer_handle_t, const gptimer_alarm_
       transport->abort_transmit_from_isr_();
     }
     transport->flush_echo_prefix_();
+    transport->queue_rx_framing_error_();
   }
   if (transport->receiver_.receiving())
     transport->schedule_rx_sample_(event->alarm_value + transport->receiver_.next_sample_delay_ticks());
@@ -346,7 +347,8 @@ void IRAM_ATTR ScsTransport::schedule_rx_sample_(uint64_t alarm_count) {
 
 void IRAM_ATTR ScsTransport::queue_rx_byte_(uint8_t byte) {
   const uint32_t timestamp_us = static_cast<uint32_t>(esp_timer_get_time());
-  RxEvent event{byte, timestamp_us, this->rx_sequence_.fetch_add(1, std::memory_order_relaxed) + 1};
+  RxEvent event{RxEvent::Type::BYTE, byte, timestamp_us,
+                this->rx_sequence_.fetch_add(1, std::memory_order_relaxed) + 1};
   bool local_echo = false;
   if (this->checking_echo_) {
     if (this->expected_tx_index_ >= this->expected_tx_size_ || byte != this->expected_tx_[this->expected_tx_index_]) {
@@ -366,6 +368,13 @@ void IRAM_ATTR ScsTransport::queue_rx_byte_(uint8_t byte) {
   // Echo is speculative until the whole local transmission matches. A
   // collision turns its validated prefix into ordinary RX events exactly once.
   this->flush_echo_prefix_();
+  this->queue_rx_event_(event);
+}
+
+void IRAM_ATTR ScsTransport::queue_rx_framing_error_() {
+  const uint32_t timestamp_us = static_cast<uint32_t>(esp_timer_get_time());
+  const RxEvent event{RxEvent::Type::FRAMING_ERROR, 0, timestamp_us,
+                      this->rx_sequence_.fetch_add(1, std::memory_order_relaxed) + 1};
   this->queue_rx_event_(event);
 }
 

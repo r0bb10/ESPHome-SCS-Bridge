@@ -61,7 +61,7 @@ bool reached(uint32_t now, uint32_t deadline) { return static_cast<int32_t>(now 
 
 struct ScsLink::Impl {
   struct Command {
-    ScsFrame frame{};
+    ScsTelegram telegram{};
     Mode mode{Mode::ACK};
     uint32_t access_delay_us{0};
     uint32_t next_attempt_us{0};
@@ -92,12 +92,12 @@ struct ScsLink::Impl {
     command_active = false;
     command.transaction.clear();
   }
-  void start(Driver &driver, const ScsFrame &frame, Wire next_wire, uint32_t now_us) {
+  void start(Driver &driver, const ScsTelegram &telegram, Wire next_wire, uint32_t now_us) {
     wire_transaction_id = next_transaction_id++;
     if (next_wire == Wire::COMMAND)
       command.transaction.begin(wire_transaction_id, static_cast<uint8_t>(command.mode), command.transaction.attempts());
     wire = next_wire;
-    if (!driver.transmit(frame, wire_transaction_id)) {
+    if (!driver.transmit(telegram, wire_transaction_id)) {
       wire = Wire::NONE;
       if (next_wire == Wire::RESPONDER)
         responder_acks++;
@@ -127,10 +127,10 @@ ScsLink::~ScsLink() = default;
 
 uint32_t ScsLink::ack_wait_us() { return ACK_WAIT_US; }
 
-bool ScsLink::enqueue(const ScsFrame &frame, Mode mode) {
+bool ScsLink::enqueue(const ScsTelegram &telegram, Mode mode) {
   if (impl_->commands.size() == MAX_COMMANDS)
     return false;
-  impl_->commands.push_back({frame, mode});
+  impl_->commands.push_back({telegram, mode});
   return true;
 }
 
@@ -190,7 +190,7 @@ void ScsLink::run(Driver &driver, uint32_t now_us) {
       impl_->access_ready(now_us, impl_->responder_next_attempt_us, impl_->responder_access_delay_us)) {
     impl_->responder_acks--;
     impl_->responder_access_delay_us = 0;
-    impl_->start(driver, ScsFrame::acknowledgment(), Impl::Wire::RESPONDER, now_us);
+    impl_->start(driver, ScsTelegram::acknowledgment(), Impl::Wire::RESPONDER, now_us);
     return;
   }
   if (impl_->command_active && impl_->command.transaction.awaiting_ack()) {
@@ -213,7 +213,7 @@ void ScsLink::run(Driver &driver, uint32_t now_us) {
       !impl_->access_ready(now_us, impl_->command.next_attempt_us, impl_->command.access_delay_us))
     return;
   impl_->command.transaction.start_attempt();
-  impl_->start(driver, impl_->command.frame, Impl::Wire::COMMAND, now_us);
+  impl_->start(driver, impl_->command.telegram, Impl::Wire::COMMAND, now_us);
 }
 
 bool ScsLink::command_active() const { return impl_->command_active; }

@@ -1,23 +1,32 @@
 #include "scs_bus.h"
 
+#include <cstdio>
+#include <functional>
+
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
 
-namespace esphome {
-namespace scs_bus {
+namespace esphome::scs_bus {
 
 static const char *const TAG = "scs_bus";
+
 class TransportDriver final : public ScsLink::Driver {
  public:
-  explicit TransportDriver(ScsTransport &transport) : transport_(transport) {}
+  TransportDriver(ScsTransport &transport, std::function<void(const ScsTelegram &)> on_transmit)
+      : transport_(transport), on_transmit_(std::move(on_transmit)) {}
   bool can_transmit() const override { return transport_.can_transmit(); }
   uint32_t last_bus_activity_us() const override { return transport_.last_bus_activity_us(); }
-  bool transmit(const ScsFrame &frame, uint32_t id) override {
-    return transport_.transmit(frame.bytes, frame.size(), id) == ESP_OK;
+  bool transmit(const ScsTelegram &telegram, uint32_t id) override {
+    if (transport_.transmit(telegram.bytes, telegram.size(), id) != ESP_OK)
+      return false;
+    on_transmit_(telegram);
+    return true;
   }
   void cancel() override { transport_.cancel_transmit(); }
+
  private:
   ScsTransport &transport_;
+  std::function<void(const ScsTelegram &)> on_transmit_;
 };
 
 void ScsBus::setup() {
@@ -33,8 +42,11 @@ void ScsBus::setup() {
     return;
   }
   command_queue_ = xQueueCreate(8, sizeof(CommandRequest));
-  frame_queue_ = xQueueCreate(16, sizeof(ScsFrame));
-  if (command_queue_ == nullptr || frame_queue_ == nullptr ||
+  telegram_queue_ = xQueueCreate(16, sizeof(ScsTelegram));
+  if (diagnostics_ != Diagnostics::OFF)
+    diagnostic_queue_ = xQueueCreate(64, sizeof(DiagnosticEvent));
+  if (command_queue_ == nullptr || telegram_queue_ == nullptr ||
+      (diagnostics_ != Diagnostics::OFF && diagnostic_queue_ == nullptr) ||
       xTaskCreate(&ScsBus::tx_task_, "scs_tx", 4096, this, configMAX_PRIORITIES - 1, &tx_task_handle_) != pdPASS) {
     ESP_LOGE(TAG, "Failed to create SCS TX coordinator task");
     mark_failed();
@@ -46,16 +58,24 @@ void ScsBus::setup() {
 void ScsBus::loop() {
   if (is_failed())
     return;
-  ScsFrame frame;
-  while (xQueueReceive(frame_queue_, &frame, 0) == pdTRUE)
-    handle_frame_(frame);
+  ScsTelegram telegram;
+  while (xQueueReceive(telegram_queue_, &telegram, 0) == pdTRUE)
+    handle_telegram_(telegram);
+  DiagnosticEvent event;
+  while (diagnostic_queue_ != nullptr && xQueueReceive(diagnostic_queue_, &event, 0) == pdTRUE)
+    handle_diagnostic_event_(event);
+  const uint32_t dropped = diagnostic_queue_overflows_.exchange(0, std::memory_order_relaxed);
+  if (dropped != 0)
+    ESP_LOGW(TAG, "Dropped %lu diagnostic events", static_cast<unsigned long>(dropped));
 }
 
 void ScsBus::dump_config() {
   ESP_LOGCONFIG(TAG, "SCS Bus:");
   ESP_LOGCONFIG(TAG, "  RX Pin: GPIO%d%s", rx_pin_, rx_inverted_ ? " (inverted)" : "");
   ESP_LOGCONFIG(TAG, "  TX Pin: GPIO%d%s", tx_pin_, tx_inverted_ ? " (inverted)" : "");
-  ESP_LOGCONFIG(TAG, "  OEM ACK timeout: %lu us", static_cast<unsigned long>(ScsLink::ack_wait_us()));
+  const char *diagnostics = diagnostics_ == Diagnostics::OFF ? "off" :
+                            diagnostics_ == Diagnostics::TELEGRAMS ? "telegrams" : "verbose";
+  ESP_LOGCONFIG(TAG, "  Diagnostics: %s", diagnostics);
 }
 
 void ScsBus::add_doorbell_listener(uint8_t address, std::function<void()> &&callback) {
@@ -66,10 +86,10 @@ void ScsBus::add_doorbell_listener(uint8_t address, std::function<void()> &&call
 }
 
 bool ScsBus::send_door_unlock(uint8_t address) {
-  ScsFrame frame;
-  if (!scs_build_door_unlock(DoorUnlock{address}, frame))
+  ScsTelegram telegram;
+  if (!scs_build_door_unlock(DoorUnlock{address}, telegram))
     return false;
-  const CommandRequest request{frame, ScsLink::Mode::ACK};
+  const CommandRequest request{telegram, ScsLink::Mode::ACK};
   if (command_queue_ == nullptr || xQueueSend(command_queue_, &request, 0) != pdTRUE) {
     queue_overflows_++;
     ESP_LOGW(TAG, "Transmit queue full; dropping door unlock for address 0x%02X", address);
@@ -82,11 +102,11 @@ bool ScsBus::send_door_unlock(uint8_t address) {
 void ScsBus::tx_task_(void *context) { static_cast<ScsBus *>(context)->run_tx_task_(); }
 
 void ScsBus::run_tx_task_() {
-  TransportDriver driver(transport_);
+  TransportDriver driver(transport_, [this](const ScsTelegram &telegram) { queue_tx_telegram_(telegram); });
   for (;;) {
     CommandRequest request;
     while (xQueueReceive(command_queue_, &request, 0) == pdTRUE) {
-      if (!link_.enqueue(request.frame, request.mode))
+      if (!link_.enqueue(request.telegram, request.mode))
         queue_overflows_++;
     }
     ScsTransport::RxEvent event;
@@ -98,6 +118,7 @@ void ScsBus::run_tx_task_() {
       link_.on_transmit_done(transaction_id, completed_at_us);
     if (transport_.take_collision()) {
       collisions_++;
+      queue_collision_();
       link_.on_collision(driver, micros());
     }
     const uint32_t now_us = micros();
@@ -110,40 +131,69 @@ void ScsBus::run_tx_task_() {
 }
 
 void ScsBus::handle_rx_in_task_(const ScsTransport::RxEvent &event) {
-  ScsFrame frame;
-  const ScsParseResult result = tx_assembler_.push(event.byte, frame);
-  if (result == ScsParseResult::INVALID) {
-    invalid_frames_++;
-    ESP_LOGW(TAG, "Dropped invalid native SCS frame");
-  } else if (result == ScsParseResult::FRAME) {
-    if (frame.is_ack())
+  if (event.type == ScsTransport::RxEvent::Type::FRAMING_ERROR) {
+    queue_rx_framing_error_(event);
+    return;
+  }
+  queue_rx_byte_(event);
+  ScsTelegram telegram;
+  const ScsTelegramParseResult result = telegram_assembler_.push(event.byte, telegram);
+  if (result == ScsTelegramParseResult::INVALID) {
+    invalid_telegrams_++;
+    queue_rx_telegram_(telegram, false);
+  } else if (result == ScsTelegramParseResult::TELEGRAM) {
+    queue_rx_telegram_(telegram, true);
+    if (telegram.is_ack())
       link_.on_ack(event.timestamp_us);
     else {
-      if (is_addressed_(frame))
+      if (is_addressed_(telegram))
         link_.note_responder_ack();
-      if (xQueueSend(frame_queue_, &frame, 0) != pdTRUE)
+      if (xQueueSend(telegram_queue_, &telegram, 0) != pdTRUE)
         queue_overflows_++;
     }
   }
 }
 
-void ScsBus::handle_frame_(const ScsFrame &frame) {
-  if (frame.is_ack())
+void ScsBus::handle_diagnostic_event_(const DiagnosticEvent &event) {
+  if (event.type == DiagnosticEventType::RX_BYTE) {
+    ESP_LOGI(TAG, "RX byte #%lu at %lu us: %02X", static_cast<unsigned long>(event.byte.sequence),
+             static_cast<unsigned long>(event.byte.timestamp_us), event.byte.byte);
     return;
-  received_frames_++;
-  publish_frame_(frame);
-  DoorbellEvent event;
-  if (scs_decode_doorbell(frame, event)) {
-    ESP_LOGD(TAG, "Doorbell event for address 0x%02X", event.address);
-    on_doorbell_callbacks_.call(event.address);
   }
+  if (event.type == DiagnosticEventType::RX_FRAMING_ERROR) {
+    ESP_LOGW(TAG, "RX framing error #%lu at %lu us", static_cast<unsigned long>(event.byte.sequence),
+             static_cast<unsigned long>(event.byte.timestamp_us));
+    return;
+  }
+  if (event.type == DiagnosticEventType::COLLISION) {
+    ESP_LOGW(TAG, "TX collision detected");
+    return;
+  }
+  const size_t length = event.telegram.size();
+  char hex[SCS_EXTENDED_TELEGRAM_SIZE * 3 + 1]{};
+  size_t offset = 0;
+  for (size_t index = 0; index < length; index++)
+    offset += snprintf(hex + offset, sizeof(hex) - offset, "%s%02X", index == 0 ? "" : " ", event.telegram.bytes[index]);
+  if (event.type == DiagnosticEventType::TX_TELEGRAM)
+    ESP_LOGI(TAG, "TX SCS %s: %s", event.telegram.is_ack() ? "ACK" : "telegram", hex);
+  else if (event.type == DiagnosticEventType::RX_INVALID_TELEGRAM)
+    ESP_LOGW(TAG, "RX invalid SCS telegram candidate: %s", hex);
+  else
+    ESP_LOGI(TAG, "RX SCS %s: %s", event.telegram.is_ack() ? "ACK" : "telegram", hex);
 }
 
+void ScsBus::handle_telegram_(const ScsTelegram &telegram) {
+  received_telegrams_++;
+  publish_telegram_(telegram);
+  DoorbellEvent event;
+  if (scs_decode_doorbell(telegram, event))
+    on_doorbell_callbacks_.call(event.address);
+}
 
-bool ScsBus::is_addressed_(const ScsFrame &frame) const {
-  if (local_system_ == 0 || !frame.is_valid() || frame.is_ack())
+bool ScsBus::is_addressed_(const ScsTelegram &telegram) const {
+  if (local_system_ == 0 || !telegram.is_valid() || telegram.is_ack())
     return false;
-  const uint8_t *payload = frame.payload();
+  const uint8_t *payload = telegram.payload();
   if ((payload[2] & 0xF0U) != static_cast<uint8_t>(local_system_ << 4U))
     return false;
   if (local_system_ == 1 || local_system_ == 4)
@@ -152,11 +202,40 @@ bool ScsBus::is_addressed_(const ScsFrame &frame) const {
          local_address_ == static_cast<uint16_t>(((payload[2] & 0x0FU) << 8U) | payload[1]);
 }
 
-
-void ScsBus::publish_frame_(const ScsFrame &frame) {
-  std::vector<uint8_t> bytes(frame.bytes, frame.bytes + frame.size());
-  on_frame_callbacks_.call(bytes);
+void ScsBus::publish_telegram_(const ScsTelegram &telegram) {
+  std::vector<uint8_t> bytes(telegram.bytes, telegram.bytes + telegram.size());
+  on_telegram_callbacks_.call(bytes);
 }
 
-}  // namespace scs_bus
-}  // namespace esphome
+void ScsBus::queue_rx_byte_(const ScsTransport::RxEvent &event) {
+  if (diagnostics_ == Diagnostics::VERBOSE)
+    queue_diagnostic_event_({DiagnosticEventType::RX_BYTE, event});
+}
+
+void ScsBus::queue_rx_framing_error_(const ScsTransport::RxEvent &event) {
+  if (diagnostics_ == Diagnostics::VERBOSE)
+    queue_diagnostic_event_({DiagnosticEventType::RX_FRAMING_ERROR, event});
+}
+
+void ScsBus::queue_rx_telegram_(const ScsTelegram &telegram, bool valid) {
+  if (diagnostics_ == Diagnostics::OFF || (!valid && diagnostics_ != Diagnostics::VERBOSE))
+    return;
+  queue_diagnostic_event_({valid ? DiagnosticEventType::RX_TELEGRAM : DiagnosticEventType::RX_INVALID_TELEGRAM, {}, telegram});
+}
+
+void ScsBus::queue_tx_telegram_(const ScsTelegram &telegram) {
+  if (diagnostics_ != Diagnostics::OFF)
+    queue_diagnostic_event_({DiagnosticEventType::TX_TELEGRAM, {}, telegram});
+}
+
+void ScsBus::queue_collision_() {
+  if (diagnostics_ == Diagnostics::VERBOSE)
+    queue_diagnostic_event_({DiagnosticEventType::COLLISION});
+}
+
+void ScsBus::queue_diagnostic_event_(const DiagnosticEvent &event) {
+  if (xQueueSend(diagnostic_queue_, &event, 0) != pdTRUE)
+    diagnostic_queue_overflows_++;
+}
+
+}  // namespace esphome::scs_bus

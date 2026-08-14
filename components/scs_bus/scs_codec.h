@@ -6,23 +6,23 @@
 namespace esphome {
 namespace scs_bus {
 
-constexpr uint8_t SCS_FRAME_START = 0xA8;
-constexpr uint8_t SCS_FRAME_END = 0xA3;
+constexpr uint8_t SCS_TELEGRAM_START = 0xA8;
+constexpr uint8_t SCS_TELEGRAM_END = 0xA3;
 constexpr uint8_t SCS_ACK = 0xA5;
-constexpr size_t SCS_STANDARD_FRAME_SIZE = 7;
-constexpr size_t SCS_EXTENDED_FRAME_SIZE = 11;
+constexpr size_t SCS_STANDARD_TELEGRAM_SIZE = 7;
+constexpr size_t SCS_EXTENDED_TELEGRAM_SIZE = 11;
 
-enum class ScsFrameType : uint8_t {
+enum class ScsTelegramType : uint8_t {
   NONE,
   ACK,
   STANDARD,
   EXTENDED,
 };
 
-// A native SCS frame in wire order. ACK frames use only bytes[0].
-struct ScsFrame {
-  uint8_t bytes[SCS_EXTENDED_FRAME_SIZE]{};
-  ScsFrameType type{ScsFrameType::NONE};
+// A native SCS telegram in wire order. ACK telegrams use only bytes[0].
+struct ScsTelegram {
+  uint8_t bytes[SCS_EXTENDED_TELEGRAM_SIZE]{};
+  ScsTelegramType type{ScsTelegramType::NONE};
 
   size_t size() const;
   size_t payload_size() const;
@@ -31,8 +31,8 @@ struct ScsFrame {
   bool is_ack() const;
   bool is_valid() const;
 
-  static ScsFrame acknowledgment();
-  static bool build(ScsFrame &frame, const uint8_t *payload, size_t payload_size);
+  static ScsTelegram acknowledgment();
+  static bool build(ScsTelegram &telegram, const uint8_t *payload, size_t payload_size);
 };
 
 // Packs the area and point nibbles used by common SCS automation devices.
@@ -43,24 +43,24 @@ constexpr uint8_t scs_pack_address(uint8_t area, uint8_t point) {
 constexpr uint8_t scs_address_area(uint8_t address) { return address >> 4; }
 constexpr uint8_t scs_address_point(uint8_t address) { return address & 0x0F; }
 
-enum class ScsParseResult : uint8_t {
+enum class ScsTelegramParseResult : uint8_t {
   NONE,
-  FRAME,
+  TELEGRAM,
   INVALID,
 };
 
-// Stateful byte-stream assembler. The 300EOS receiver selects 11-byte frames
+// Stateful byte-stream assembler. The 300EOS receiver selects 11-byte telegrams
 // from a D* or E* first payload byte; all other payloads use seven bytes.
-class ScsFrameAssembler {
+class ScsTelegramAssembler {
  public:
-  ScsParseResult push(uint8_t byte, ScsFrame &frame);
+  ScsTelegramParseResult push(uint8_t byte, ScsTelegram &telegram);
   void reset();
 
  private:
-  void begin_frame();
+  void begin_telegram();
   void resynchronize();
 
-  uint8_t buffer_[SCS_EXTENDED_FRAME_SIZE]{};
+  uint8_t buffer_[SCS_EXTENDED_TELEGRAM_SIZE]{};
   size_t size_{0};
   size_t expected_size_{0};
 };

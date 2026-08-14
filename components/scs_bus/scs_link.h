@@ -18,14 +18,14 @@ class ScsLink {
     // Access timing is applied against last_bus_activity_us(), not here.
     virtual bool can_transmit() const = 0;
     virtual uint32_t last_bus_activity_us() const = 0;
-    virtual bool transmit(const ScsFrame &frame, uint32_t transaction_id) = 0;
+    virtual bool transmit(const ScsTelegram &telegram, uint32_t transaction_id) = 0;
     virtual void cancel() = 0;
   };
 
   ScsLink();
   ~ScsLink();
 
-  bool enqueue(const ScsFrame &frame, Mode mode = Mode::ACK);
+  bool enqueue(const ScsTelegram &telegram, Mode mode = Mode::ACK);
   void note_responder_ack();
   void on_ack(uint32_t timestamp_us);
   void on_transmit_done(uint32_t transaction_id, uint32_t timestamp_us);

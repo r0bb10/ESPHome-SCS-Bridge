@@ -16,7 +16,8 @@ CONF_RX_INVERTED = "rx_inverted"
 CONF_TX_INVERTED = "tx_inverted"
 CONF_LOCAL_SYSTEM = "local_system"
 CONF_LOCAL_ADDRESS = "local_address"
-CONF_ON_FRAME = "on_frame"
+CONF_ON_TELEGRAM = "on_telegram"
+CONF_DIAGNOSTICS = "diagnostics"
 
 scs_bus_ns = cg.esphome_ns.namespace("scs_bus")
 ScsBus = scs_bus_ns.class_("ScsBus", cg.Component)
@@ -31,7 +32,8 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_TX_INVERTED, default=False): cv.boolean,
             cv.Optional(CONF_LOCAL_SYSTEM): cv.int_range(min=1, max=15),
             cv.Optional(CONF_LOCAL_ADDRESS): cv.int_range(min=0, max=0xFFFF),
-            cv.Optional(CONF_ON_FRAME): automation.validate_automation({}),
+            cv.Optional(CONF_DIAGNOSTICS, default="off"): cv.one_of("off", "telegrams", "verbose", lower=True),
+            cv.Optional(CONF_ON_TELEGRAM): automation.validate_automation({}),
         }
     ).extend(cv.COMPONENT_SCHEMA),
     cv.only_on_esp32,
@@ -40,9 +42,9 @@ CONFIG_SCHEMA = cv.All(
 
 _CALLBACK_AUTOMATIONS = (
     automation.CallbackAutomation(
-        CONF_ON_FRAME,
-        "add_on_frame_callback",
-        [(cg.std_vector.template(cg.uint8), "frame")],
+        CONF_ON_TELEGRAM,
+        "add_on_telegram_callback",
+        [(cg.std_vector.template(cg.uint8), "telegram")],
     ),
 )
 
@@ -60,6 +62,8 @@ async def to_code(config):
     cg.add(var.set_tx_pin(config[CONF_TX_PIN]))
     cg.add(var.set_rx_inverted(config[CONF_RX_INVERTED]))
     cg.add(var.set_tx_inverted(config[CONF_TX_INVERTED]))
+    diagnostics = {"off": 0, "telegrams": 1, "verbose": 2}
+    cg.add(var.set_diagnostics(diagnostics[config[CONF_DIAGNOSTICS]]))
     if CONF_LOCAL_SYSTEM in config:
         cg.add(var.set_local_system(config[CONF_LOCAL_SYSTEM]))
     if CONF_LOCAL_ADDRESS in config:

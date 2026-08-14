@@ -14,121 +14,121 @@ uint8_t xor_payload(const uint8_t *payload, size_t payload_size) {
 
 }  // namespace
 
-size_t ScsFrame::size() const {
+size_t ScsTelegram::size() const {
   switch (type) {
-    case ScsFrameType::ACK:
+    case ScsTelegramType::ACK:
       return 1;
-    case ScsFrameType::STANDARD:
-      return SCS_STANDARD_FRAME_SIZE;
-    case ScsFrameType::EXTENDED:
-      return SCS_EXTENDED_FRAME_SIZE;
+    case ScsTelegramType::STANDARD:
+      return SCS_STANDARD_TELEGRAM_SIZE;
+    case ScsTelegramType::EXTENDED:
+      return SCS_EXTENDED_TELEGRAM_SIZE;
     default:
       return 0;
   }
 }
 
-size_t ScsFrame::payload_size() const {
+size_t ScsTelegram::payload_size() const {
   switch (type) {
-    case ScsFrameType::STANDARD:
+    case ScsTelegramType::STANDARD:
       return 4;
-    case ScsFrameType::EXTENDED:
+    case ScsTelegramType::EXTENDED:
       return 8;
     default:
       return 0;
   }
 }
 
-const uint8_t *ScsFrame::payload() const { return payload_size() == 0 ? nullptr : bytes + 1; }
+const uint8_t *ScsTelegram::payload() const { return payload_size() == 0 ? nullptr : bytes + 1; }
 
-uint8_t ScsFrame::checksum() const {
+uint8_t ScsTelegram::checksum() const {
   const size_t data_size = payload_size();
   return data_size == 0 ? 0 : bytes[1 + data_size];
 }
 
-bool ScsFrame::is_ack() const { return type == ScsFrameType::ACK && bytes[0] == SCS_ACK; }
+bool ScsTelegram::is_ack() const { return type == ScsTelegramType::ACK && bytes[0] == SCS_ACK; }
 
-bool ScsFrame::is_valid() const {
+bool ScsTelegram::is_valid() const {
   if (is_ack())
     return true;
 
   const size_t data_size = payload_size();
   // The 300EOS RX path checks the start marker and XOR only. Its transmit
   // path always emits A3, but rx_end does not reject a different final byte.
-  return data_size != 0 && bytes[0] == SCS_FRAME_START && bytes[1 + data_size] == xor_payload(bytes + 1, data_size);
+  return data_size != 0 && bytes[0] == SCS_TELEGRAM_START && bytes[1 + data_size] == xor_payload(bytes + 1, data_size);
 }
 
-ScsFrame ScsFrame::acknowledgment() {
-  ScsFrame frame;
-  frame.bytes[0] = SCS_ACK;
-  frame.type = ScsFrameType::ACK;
-  return frame;
+ScsTelegram ScsTelegram::acknowledgment() {
+  ScsTelegram telegram;
+  telegram.bytes[0] = SCS_ACK;
+  telegram.type = ScsTelegramType::ACK;
+  return telegram;
 }
 
-bool ScsFrame::build(ScsFrame &frame, const uint8_t *payload, size_t payload_size) {
+bool ScsTelegram::build(ScsTelegram &telegram, const uint8_t *payload, size_t payload_size) {
   if (payload == nullptr || (payload_size != 4 && payload_size != 8))
     return false;
 
-  frame = ScsFrame{};
-  frame.type = payload_size == 4 ? ScsFrameType::STANDARD : ScsFrameType::EXTENDED;
-  frame.bytes[0] = SCS_FRAME_START;
+  telegram = ScsTelegram{};
+  telegram.type = payload_size == 4 ? ScsTelegramType::STANDARD : ScsTelegramType::EXTENDED;
+  telegram.bytes[0] = SCS_TELEGRAM_START;
   for (size_t index = 0; index < payload_size; ++index)
-    frame.bytes[1 + index] = payload[index];
-  frame.bytes[1 + payload_size] = xor_payload(payload, payload_size);
-  frame.bytes[2 + payload_size] = SCS_FRAME_END;
+    telegram.bytes[1 + index] = payload[index];
+  telegram.bytes[1 + payload_size] = xor_payload(payload, payload_size);
+  telegram.bytes[2 + payload_size] = SCS_TELEGRAM_END;
   return true;
 }
 
-ScsParseResult ScsFrameAssembler::push(uint8_t byte, ScsFrame &frame) {
+ScsTelegramParseResult ScsTelegramAssembler::push(uint8_t byte, ScsTelegram &telegram) {
   if (size_ == 0) {
     if (byte == SCS_ACK) {
-      frame = ScsFrame::acknowledgment();
-      return ScsParseResult::FRAME;
+      telegram = ScsTelegram::acknowledgment();
+      return ScsTelegramParseResult::TELEGRAM;
     }
-    if (byte == SCS_FRAME_START)
-      begin_frame();
-    return ScsParseResult::NONE;
+    if (byte == SCS_TELEGRAM_START)
+      begin_telegram();
+    return ScsTelegramParseResult::NONE;
   }
 
-  // A delimiter always starts a fresh candidate after noise or a malformed frame.
-  if (byte == SCS_FRAME_START) {
-    begin_frame();
-    return ScsParseResult::NONE;
+  // A delimiter always starts a fresh candidate after noise or a malformed telegram.
+  if (byte == SCS_TELEGRAM_START) {
+    begin_telegram();
+    return ScsTelegramParseResult::NONE;
   }
 
   buffer_[size_++] = byte;
   if (size_ == 2)
     expected_size_ = (buffer_[1] & 0xF0U) == 0xD0U || (buffer_[1] & 0xF0U) == 0xE0U ?
-                         SCS_EXTENDED_FRAME_SIZE : SCS_STANDARD_FRAME_SIZE;
+                          SCS_EXTENDED_TELEGRAM_SIZE : SCS_STANDARD_TELEGRAM_SIZE;
   if (size_ < expected_size_)
-    return ScsParseResult::NONE;
+    return ScsTelegramParseResult::NONE;
 
-  frame.type = expected_size_ == SCS_EXTENDED_FRAME_SIZE ? ScsFrameType::EXTENDED : ScsFrameType::STANDARD;
+  telegram.type = expected_size_ == SCS_EXTENDED_TELEGRAM_SIZE ? ScsTelegramType::EXTENDED : ScsTelegramType::STANDARD;
   for (size_t index = 0; index < size_; ++index)
-    frame.bytes[index] = buffer_[index];
-  if (frame.is_valid()) {
+    telegram.bytes[index] = buffer_[index];
+  if (telegram.is_valid()) {
     reset();
-    return ScsParseResult::FRAME;
+    return ScsTelegramParseResult::TELEGRAM;
   }
 
   resynchronize();
-  return ScsParseResult::INVALID;
+  return ScsTelegramParseResult::INVALID;
 }
 
-void ScsFrameAssembler::reset() {
+void ScsTelegramAssembler::reset() {
   size_ = 0;
   expected_size_ = 0;
 }
 
-void ScsFrameAssembler::begin_frame() {
-  buffer_[0] = SCS_FRAME_START;
+void ScsTelegramAssembler::begin_telegram() {
+  buffer_[0] = SCS_TELEGRAM_START;
   size_ = 1;
   expected_size_ = 0;
 }
 
-void ScsFrameAssembler::resynchronize() {
+void ScsTelegramAssembler::resynchronize() {
   size_t start = size_;
   for (size_t index = 1; index < size_; ++index) {
-    if (buffer_[index] == SCS_FRAME_START)
+    if (buffer_[index] == SCS_TELEGRAM_START)
       start = index;
   }
 
@@ -142,7 +142,7 @@ void ScsFrameAssembler::resynchronize() {
     buffer_[index] = buffer_[start + index];
   size_ = remaining;
   expected_size_ = size_ >= 2 && ((buffer_[1] & 0xF0U) == 0xD0U || (buffer_[1] & 0xF0U) == 0xE0U) ?
-                       SCS_EXTENDED_FRAME_SIZE : size_ >= 2 ? SCS_STANDARD_FRAME_SIZE : 0;
+                        SCS_EXTENDED_TELEGRAM_SIZE : size_ >= 2 ? SCS_STANDARD_TELEGRAM_SIZE : 0;
 }
 
 }  // namespace scs_bus
