@@ -9,6 +9,7 @@ from esphome.const import (
 )
 
 DEPENDENCIES = ["esp32"]
+AUTO_LOAD = ["binary_sensor", "button"]
 MULTI_CONF = True
 
 CONF_RX_INVERTED = "rx_inverted"
