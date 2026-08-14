@@ -7,13 +7,14 @@ namespace esphome::scs_bus {
 
 class ScsSerialReceiver {
  public:
-  static constexpr uint32_t CLOCK_HZ = 80000000;
-  // Nearest whole 80 MHz ticks for the 300EOS M4's 34.67 us / 104.01 us
-  // timing, preserving the original receive sample position.
-  static constexpr uint16_t ACTIVE_TICKS = 2774;
-  static constexpr uint16_t CELL_TICKS = 8321;
+  // ESP32-C3 GPTimer requires an APB-clock divider of at least two, making
+  // 40 MHz its maximum valid shared timing base. These are the nearest ticks
+  // for the 300EOS M4's 34.67 us / 104.01 us timing.
+  static constexpr uint32_t CLOCK_HZ = 40000000;
+  static constexpr uint16_t ACTIVE_TICKS = 1387;
+  static constexpr uint16_t CELL_TICKS = 4160;
   static constexpr uint16_t SAMPLE_TICKS = ACTIVE_TICKS / 2;
-  static constexpr uint16_t SYNC_TICKS = 1828;
+  static constexpr uint16_t SYNC_TICKS = 914;
 
   enum class State : uint8_t { IDLE, SYNC, DATA, STOP };
   enum class SampleResult : uint8_t { NONE, BYTE, INVALID };
