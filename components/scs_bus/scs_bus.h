@@ -40,7 +40,7 @@ class ScsBus : public Component {
 
  protected:
   struct CommandRequest { ScsTelegram telegram; ScsLink::Mode mode; };
-  enum class DiagnosticEventType : uint8_t { RX_BYTE, RX_FRAMING_ERROR, RX_TELEGRAM, RX_INVALID_TELEGRAM, TX_TELEGRAM, COLLISION };
+  enum class DiagnosticEventType : uint8_t { RX_BYTE, RX_FRAMING_ERROR, RX_TELEGRAM, RX_INVALID_TELEGRAM, RX_DUPLICATE_TELEGRAM, TX_TELEGRAM, COLLISION };
   struct DiagnosticEvent {
     DiagnosticEventType type;
     ScsTransport::RxEvent byte{};
@@ -57,6 +57,7 @@ class ScsBus : public Component {
   void queue_rx_byte_(const ScsTransport::RxEvent &event);
   void queue_rx_framing_error_(const ScsTransport::RxEvent &event);
   void queue_rx_telegram_(const ScsTelegram &telegram, bool valid);
+  void queue_duplicate_telegram_(const ScsTelegram &telegram);
   void queue_tx_telegram_(const ScsTelegram &telegram);
   void queue_collision_();
   void queue_diagnostic_event_(const DiagnosticEvent &event);
@@ -70,6 +71,7 @@ class ScsBus : public Component {
   uint16_t local_address_{0};
   ScsTransport transport_;
   ScsTelegramAssembler telegram_assembler_;
+  ScsTelegramDeduplicator telegram_deduplicator_;
   ScsLink link_;
   QueueHandle_t command_queue_{nullptr};
   QueueHandle_t telegram_queue_{nullptr};
@@ -79,6 +81,7 @@ class ScsBus : public Component {
   CallbackManager<void(uint8_t)> on_doorbell_callbacks_;
   std::atomic<uint32_t> received_telegrams_{0};
   std::atomic<uint32_t> invalid_telegrams_{0};
+  std::atomic<uint32_t> duplicate_telegrams_{0};
   std::atomic<uint32_t> collisions_{0};
   std::atomic<uint32_t> queue_overflows_{0};
   std::atomic<uint32_t> diagnostic_queue_overflows_{0};

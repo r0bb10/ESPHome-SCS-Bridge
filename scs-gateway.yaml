@@ -32,7 +32,8 @@ scs_bus:
   rx_pin: GPIO4
   tx_pin: GPIO5
   # off: no traffic logs; telegrams: valid RX/TX telegrams and ACKs;
-  # verbose: also bytes, malformed telegrams, framing errors, and collisions.
+  # verbose: also bytes, malformed telegrams, framing errors, collisions, and
+  # suppressed duplicate telegrams.
   diagnostics: "off"
 
 binary_sensor:

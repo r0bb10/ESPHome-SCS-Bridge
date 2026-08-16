@@ -65,5 +65,31 @@ class ScsTelegramAssembler {
   size_t expected_size_{0};
 };
 
+// Suppresses repeated identical telegrams from the same sender. OEM firmware
+// emits eight copies of no-ACK messages spaced by its randomized access delay
+// (about 5.2 to 31.7 ms between copies) and retries ACK-mode commands, so a
+// receiver that processed every copy would act on each command up to eight
+// times. The window refreshes on every suppressed copy, so a burst whose total
+// span exceeds the window is still suppressed as long as consecutive copies
+// stay within it. ACK telegrams are never filtered because each one feeds the
+// link layer and several devices may each send one.
+class ScsTelegramDeduplicator {
+ public:
+  static constexpr uint32_t DEFAULT_WINDOW_US = 100000;
+
+  explicit ScsTelegramDeduplicator(uint32_t window_us = DEFAULT_WINDOW_US) : window_us_(window_us) {}
+
+  bool is_duplicate(const ScsTelegram &telegram, uint32_t now_us);
+
+  uint32_t suppressed() const { return suppressed_; }
+
+ private:
+  uint32_t window_us_;
+  ScsTelegram last_{};
+  uint32_t last_seen_us_{0};
+  bool has_last_{false};
+  uint32_t suppressed_{0};
+};
+
 }  // namespace scs_bus
 }  // namespace esphome

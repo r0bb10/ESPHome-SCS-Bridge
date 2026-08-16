@@ -1,5 +1,7 @@
 #include "scs_codec.h"
 
+#include <cstring>
+
 namespace esphome {
 namespace scs_bus {
 
@@ -143,6 +145,26 @@ void ScsTelegramAssembler::resynchronize() {
   size_ = remaining;
   expected_size_ = size_ >= 2 && ((buffer_[1] & 0xF0U) == 0xD0U || (buffer_[1] & 0xF0U) == 0xE0U) ?
                         SCS_EXTENDED_TELEGRAM_SIZE : size_ >= 2 ? SCS_STANDARD_TELEGRAM_SIZE : 0;
+}
+
+bool ScsTelegramDeduplicator::is_duplicate(const ScsTelegram &telegram, uint32_t now_us) {
+  if (telegram.is_ack())
+    return false;
+
+  if (has_last_ && last_.type == telegram.type &&
+      memcmp(last_.bytes, telegram.bytes, telegram.size()) == 0) {
+    const int32_t age_us = static_cast<int32_t>(now_us - last_seen_us_);
+    if (age_us >= 0 && static_cast<uint32_t>(age_us) < window_us_) {
+      last_seen_us_ = now_us;
+      suppressed_++;
+      return true;
+    }
+  }
+
+  has_last_ = true;
+  last_ = telegram;
+  last_seen_us_ = now_us;
+  return false;
 }
 
 }  // namespace scs_bus

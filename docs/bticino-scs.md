@@ -131,7 +131,9 @@ For an ACK-required command, the recovered controller waits about 2.843 ms
 after the end of transmission for `A5`. If no ACK arrives, it waits about
 2.912 ms and retries. It allows three total attempts. For no-ACK messages, it
 emits eight copies. These are observed BTicino gateway behaviors, not a public
-universal SCS specification.
+universal SCS specification. A receiver that publishes every copy would act on
+the same command up to eight times, so it commonly suppresses identical
+telegrams that repeat within a short window.
 
 ## Building An SCS Device
 

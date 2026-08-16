@@ -150,7 +150,12 @@ void ScsBus::handle_rx_in_task_(const ScsTransport::RxEvent &event) {
     else {
       if (is_addressed_(telegram))
         link_.note_responder_ack();
-      if (xQueueSend(telegram_queue_, &telegram, 0) != pdTRUE)
+      // The responder ACK is noted before deduplication so a retried command
+      // whose earlier ACK was lost is answered again.
+      if (telegram_deduplicator_.is_duplicate(telegram, event.timestamp_us)) {
+        duplicate_telegrams_++;
+        queue_duplicate_telegram_(telegram);
+      } else if (xQueueSend(telegram_queue_, &telegram, 0) != pdTRUE)
         queue_overflows_++;
     }
   }
@@ -180,6 +185,8 @@ void ScsBus::handle_diagnostic_event_(const DiagnosticEvent &event) {
     ESP_LOGI(TAG, "TX SCS %s: %s", event.telegram.is_ack() ? "ACK" : "telegram", hex);
   else if (event.type == DiagnosticEventType::RX_INVALID_TELEGRAM)
     ESP_LOGW(TAG, "RX invalid SCS telegram candidate: %s", hex);
+  else if (event.type == DiagnosticEventType::RX_DUPLICATE_TELEGRAM)
+    ESP_LOGI(TAG, "RX duplicate SCS telegram suppressed: %s", hex);
   else
     ESP_LOGI(TAG, "RX SCS %s: %s", event.telegram.is_ack() ? "ACK" : "telegram", hex);
 }
@@ -223,6 +230,11 @@ void ScsBus::queue_rx_telegram_(const ScsTelegram &telegram, bool valid) {
   if (diagnostics_ == Diagnostics::OFF || (!valid && diagnostics_ != Diagnostics::VERBOSE))
     return;
   queue_diagnostic_event_({valid ? DiagnosticEventType::RX_TELEGRAM : DiagnosticEventType::RX_INVALID_TELEGRAM, {}, telegram});
+}
+
+void ScsBus::queue_duplicate_telegram_(const ScsTelegram &telegram) {
+  if (diagnostics_ == Diagnostics::VERBOSE)
+    queue_diagnostic_event_({DiagnosticEventType::RX_DUPLICATE_TELEGRAM, {}, telegram});
 }
 
 void ScsBus::queue_tx_telegram_(const ScsTelegram &telegram) {
