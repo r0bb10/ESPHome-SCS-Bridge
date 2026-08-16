@@ -301,6 +301,19 @@ void IRAM_ATTR ScsTransport::on_rx_edge_(void *context) {
   transport->last_bus_activity_us_ = static_cast<uint32_t>(esp_timer_get_time());
   const uint8_t level = static_cast<uint8_t>(gpio_get_level(static_cast<gpio_num_t>(transport->rx_pin_))) ^
                         transport->rx_inverted_;
+  if (transport->checking_echo_ && transport->receiver_.receiving() && level == 0) {
+    const auto state = transport->receiver_.state();
+    const bool expected_high = state == ScsSerialReceiver::State::STOP ||
+                               (state == ScsSerialReceiver::State::DATA &&
+                                ((transport->expected_tx_[transport->expected_tx_index_] >>
+                                  transport->receiver_.bit_index()) &
+                                 1U) != 0);
+    if (expected_high) {
+      transport->collision_detected_ = true;
+      transport->abort_transmit_from_isr_();
+    }
+    return;
+  }
   if (level != 0 || !transport->receiver_.start())
     return;
 

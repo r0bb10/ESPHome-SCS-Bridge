@@ -20,6 +20,12 @@ int main() {
            (index + 1 == transmitted.size() ? ScsTelegramParseResult::TELEGRAM : ScsTelegramParseResult::NONE));
   assert(received.is_valid());
 
+  // MX rx_end checks the start marker and XOR, but intentionally does not
+  // require the final byte to be A3 even though its TX path emits A3.
+  ScsTelegram mx_accepted = transmitted;
+  mx_accepted.bytes[mx_accepted.size() - 1] = 0;
+  assert(mx_accepted.is_valid());
+
   const ScsTelegram ack = ScsTelegram::acknowledgment();
   assert(assembler.push(ack.bytes[0], received) == ScsTelegramParseResult::TELEGRAM && received.is_ack());
   return 0;

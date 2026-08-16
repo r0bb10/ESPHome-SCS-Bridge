@@ -124,8 +124,10 @@ void ScsBus::run_tx_task_() {
     const uint32_t now_us = micros();
     link_.run(driver, now_us);
     uint32_t wake_at_us;
-    if (link_.next_wakeup_us(&wake_at_us))
-      transport_.arm_event_task_in(static_cast<uint32_t>(wake_at_us - now_us));
+    if (link_.next_wakeup_us(&wake_at_us)) {
+      const uint32_t delay_us = static_cast<int32_t>(wake_at_us - now_us) <= 0 ? 0 : wake_at_us - now_us;
+      transport_.arm_event_task_in(delay_us);
+    }
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
   }
 }
