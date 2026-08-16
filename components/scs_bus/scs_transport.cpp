@@ -1,7 +1,7 @@
 #include "scs_transport.h"
 
 #include "esp_timer.h"
-#include "esp32c3/rom/gpio.h"
+#include "esp_rom_gpio.h"
 #include "hal/gpio_ll.h"
 #include "soc/gpio_sig_map.h"
 #include "soc/gpio_struct.h"
@@ -419,7 +419,7 @@ void IRAM_ATTR ScsTransport::flush_echo_prefix_() {
 void IRAM_ATTR ScsTransport::abort_transmit_from_isr_() {
   if (!this->transmitting_)
     return;
-  gpio_matrix_out(this->tx_pin_, SIG_GPIO_OUT_IDX, false, false);
+  esp_rom_gpio_connect_out_signal(this->tx_pin_, SIG_GPIO_OUT_IDX, false, false);
   gpio_ll_set_level(&GPIO, this->tx_pin_, this->tx_inverted_ ? 0 : 1);
   this->tx_disconnected_ = true;
   this->transmitting_ = false;
