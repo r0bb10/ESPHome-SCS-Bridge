@@ -1,3 +1,5 @@
 .dev/
 .bak/
 .misc/
+.esphome/
+__pycache__/

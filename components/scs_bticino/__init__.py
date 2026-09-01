@@ -1,63 +1,28 @@
 import esphome.codegen as cg
-from esphome.components import remote_base
 import esphome.config_validation as cv
-from esphome.core import ID
+from esphome import pins
+from esphome.const import CONF_ID
 
-CONF_ACK = "ack"
-CONF_PAYLOAD = "payload"
-CONF_PAYLOAD_ID = "payload_id"
+CONF_RX_PIN = "rx_pin"
+CONF_TX_PIN = "tx_pin"
 
 scs_bticino_ns = cg.esphome_ns.namespace("scs_bticino")
-ScsBticinoData = scs_bticino_ns.struct("ScsBticinoData")
-ScsBticinoTrigger = scs_bticino_ns.class_(
-    "ScsBticinoTrigger", remote_base.RemoteReceiverTrigger
-)
-ScsBticinoDumper = scs_bticino_ns.class_(
-    "ScsBticinoDumper", remote_base.RemoteReceiverDumperBase
-)
-ScsBticinoAction = scs_bticino_ns.class_(
-    "ScsBticinoAction", remote_base.RemoteTransmitterActionBase
-)
+ScsBticinoController = scs_bticino_ns.class_("ScsBticinoController", cg.Component)
 
-CONFIG_SCHEMA = cv.Schema({})
-
-
-def validate_ack(value):
-    if not cv.boolean(value):
-        raise cv.Invalid("ack must be true")
-    return True
-
-
-TRANSMIT_SCHEMA = cv.Schema(
-    {
-        cv.Optional(CONF_ACK): validate_ack,
-        cv.Optional(CONF_PAYLOAD): cv.All(
-            [cv.Any(cv.hex_uint8_t, cv.uint8_t)],
-            cv.Any(cv.Length(min=4, max=4), cv.Length(min=8, max=8)),
-        ),
-        cv.GenerateID(CONF_PAYLOAD_ID): cv.declare_id(cg.uint8),
-    }
-).add_extra(
-    cv.has_exactly_one_key(CONF_ACK, CONF_PAYLOAD)
+CONFIG_SCHEMA = cv.All(
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.declare_id(ScsBticinoController),
+            cv.Required(CONF_RX_PIN): pins.internal_gpio_input_pin_schema,
+            cv.Required(CONF_TX_PIN): pins.internal_gpio_output_pin_schema,
+        }
+    ).extend(cv.COMPONENT_SCHEMA),
+    cv.only_on_esp32,
 )
 
 
-@remote_base.register_trigger("scs_bticino", ScsBticinoTrigger, ScsBticinoData)
-def scs_bticino_trigger(var, config):
-    pass
-
-
-@remote_base.register_dumper("scs_bticino", ScsBticinoDumper)
-def scs_bticino_dumper(var, config):
-    pass
-
-
-@remote_base.register_action("scs_bticino", ScsBticinoAction, TRANSMIT_SCHEMA)
-async def scs_bticino_action(var, config, args):
-    cg.add(var.set_ack(await cg.templatable(config.get(CONF_ACK, False), args, cg.bool_)))
-    if CONF_PAYLOAD in config:
-        payload = cg.static_const_array(
-            ID(f"{var.base}_payload", is_declaration=True, type=cg.uint8),
-            cg.ArrayInitializer(*config[CONF_PAYLOAD]),
-        )
-        cg.add(var.set_payload(payload, len(config[CONF_PAYLOAD])))
+async def to_code(config):
+    var = cg.new_Pvariable(config[CONF_ID])
+    await cg.register_component(var, config)
+    cg.add(var.set_rx_pin(await cg.gpio_pin_expression(config[CONF_RX_PIN])))
+    cg.add(var.set_tx_pin(await cg.gpio_pin_expression(config[CONF_TX_PIN])))

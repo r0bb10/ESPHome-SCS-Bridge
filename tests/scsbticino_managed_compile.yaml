@@ -1,0 +1,17 @@
+esphome:
+  name: scsbticino-managed-test
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: esp-idf
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [scs_bticino]
+
+scs_bticino:
+  rx_pin: GPIO4
+  tx_pin: GPIO3
