@@ -3,3 +3,4 @@
 .misc/
 .esphome/
 __pycache__/
+tests/.gitignore
