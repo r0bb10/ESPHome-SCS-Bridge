@@ -1,13 +1,11 @@
 #include "scsbticino.h"
 
-#include "scsbticino_codec.h"
-
 #include "esphome/core/log.h"
 
 #ifdef USE_ESP32
-#include <vector>
-
 #include "esp_err.h"
+#include "esp_attr.h"
+#include "driver/gpio.h"
 #endif
 
 namespace esphome::scs_bticino {
@@ -31,37 +29,60 @@ void ScsBticinoController::setup() {
     return;
   }
 
-  rmt_tx_channel_config_t tx_config{};
-  tx_config.clk_src = RMT_CLK_SRC_DEFAULT;
-  tx_config.resolution_hz = 1000000;
-  tx_config.mem_block_symbols = 64;
-  tx_config.trans_queue_depth = 1;
-  tx_config.gpio_num = static_cast<gpio_num_t>(this->tx_pin_->get_pin());
-  tx_config.flags.invert_out = false;
-  tx_config.flags.with_dma = false;
-  tx_config.flags.io_loop_back = false;
-  tx_config.flags.io_od_mode = false;
-  esp_err_t error = rmt_new_tx_channel(&tx_config, &this->tx_channel_);
+  this->tx_pin_->setup();
+  this->tx_pin_->digital_write(false);
+  gptimer_config_t timer_config{};
+  timer_config.clk_src = GPTIMER_CLK_SRC_DEFAULT;
+  timer_config.direction = GPTIMER_COUNT_UP;
+  timer_config.resolution_hz = 1000000;
+  esp_err_t error = gptimer_new_timer(&timer_config, &this->tx_timer_);
   if (error != ESP_OK) {
-    ESP_LOGE(TAG, "rmt_new_tx_channel failed: %s", esp_err_to_name(error));
+    ESP_LOGE(TAG, "gptimer_new_timer failed: %s", esp_err_to_name(error));
     this->mark_failed();
     return;
   }
+  const gptimer_event_callbacks_t timer_callbacks{.on_alarm = &ScsBticinoController::on_tx_timer_};
+  error = gptimer_register_event_callbacks(this->tx_timer_, &timer_callbacks, this);
+  if (error != ESP_OK) {
+    ESP_LOGE(TAG, "gptimer_register_event_callbacks failed: %s", esp_err_to_name(error));
+    this->mark_failed();
+    return;
+  }
+  error = gptimer_enable(this->tx_timer_);
+  if (error != ESP_OK) {
+    ESP_LOGE(TAG, "gptimer_enable failed: %s", esp_err_to_name(error));
+    this->mark_failed();
+    return;
+  }
+  const auto rx_gpio = static_cast<gpio_num_t>(this->rx_pin_->get_pin());
+  gpio_set_intr_type(rx_gpio, GPIO_INTR_POSEDGE);
+  error = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+  if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+    ESP_LOGE(TAG, "gpio_install_isr_service failed: %s", esp_err_to_name(error));
+    this->mark_failed();
+    return;
+  }
+  error = gpio_isr_handler_add(rx_gpio, &ScsBticinoController::on_rx_edge_, this);
+  if (error != ESP_OK) {
+    ESP_LOGE(TAG, "gpio_isr_handler_add failed: %s", esp_err_to_name(error));
+    this->mark_failed();
+  }
+#endif
+}
 
-  const rmt_copy_encoder_config_t encoder_config{};
-  error = rmt_new_copy_encoder(&encoder_config, &this->tx_encoder_);
-  if (error != ESP_OK) {
-    ESP_LOGE(TAG, "rmt_new_copy_encoder failed: %s", esp_err_to_name(error));
-    this->mark_failed();
-    return;
-  }
-
-  error = rmt_enable(this->tx_channel_);
-  if (error != ESP_OK) {
-    ESP_LOGE(TAG, "rmt_enable failed: %s", esp_err_to_name(error));
-    this->mark_failed();
-    return;
-  }
+bool ScsBticinoController::send(const ScsBticinoData &frame, ScsTxType type) {
+#ifndef USE_ESP32
+  return false;
+#else
+  if (!this->transmitter_.enqueue(frame, type))
+    return false;
+  ScsTxStep step{};
+  ScsTxResult result{};
+  if (!this->transmitter_.advance(false, &step, &result))
+    return false;
+  this->tx_pin_->digital_write(step.drive_dominant);
+  this->next_alarm_us_ = step.delay_us;
+  return this->arm_tx_timer_(this->next_alarm_us_);
 #endif
 }
 
@@ -73,6 +94,37 @@ void ScsBticinoController::loop() {
   }
 #endif
 }
+
+#ifdef USE_ESP32
+bool ScsBticinoController::arm_tx_timer_(uint64_t alarm_us) {
+  const gptimer_alarm_config_t config{.alarm_count = alarm_us, .flags = {.auto_reload_on_alarm = false}};
+  return gptimer_set_alarm_action(this->tx_timer_, &config) == ESP_OK && gptimer_start(this->tx_timer_) == ESP_OK;
+}
+
+bool IRAM_ATTR ScsBticinoController::on_tx_timer_(gptimer_handle_t timer, const gptimer_alarm_event_data_t *event,
+                                                   void *arg) {
+  auto *controller = static_cast<ScsBticinoController *>(arg);
+  ScsTxStep step{};
+  ScsTxResult result{};
+  const bool active = controller->transmitter_.advance(controller->bus_dominant_, &step, &result);
+  controller->bus_dominant_ = false;
+  if (!active) {
+    controller->tx_pin_->digital_write(false);
+    controller->tx_result_ = result;
+    controller->tx_result_ready_ = true;
+    return false;
+  }
+  controller->tx_pin_->digital_write(step.drive_dominant);
+  const gptimer_alarm_config_t config{.alarm_count = event->alarm_value + step.delay_us,
+                                      .flags = {.auto_reload_on_alarm = false}};
+  gptimer_set_alarm_action(timer, &config);
+  return false;
+}
+
+void IRAM_ATTR ScsBticinoController::on_rx_edge_(void *arg) {
+  static_cast<ScsBticinoController *>(arg)->bus_dominant_ = true;
+}
+#endif
 
 void ScsBticinoController::dump_config() {
   ESP_LOGCONFIG(TAG, "SCS Bticino:");

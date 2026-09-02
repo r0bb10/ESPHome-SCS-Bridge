@@ -4,10 +4,10 @@
 #include "esphome/core/gpio.h"
 
 #include "scsbticino_rx.h"
+#include "scsbticino_tx.h"
 
 #ifdef USE_ESP32
-#include "driver/rmt_encoder.h"
-#include "driver/rmt_tx.h"
+#include "driver/gptimer.h"
 #endif
 
 namespace esphome::scs_bticino {
@@ -20,15 +20,24 @@ class ScsBticinoController : public Component {
   void setup() override;
   void loop() override;
   void dump_config() override;
+  bool send(const ScsBticinoData &frame, ScsTxType type);
   float get_setup_priority() const override { return setup_priority::HARDWARE; }
 
  protected:
 #ifdef USE_ESP32
-  rmt_channel_handle_t tx_channel_{nullptr};
-  rmt_encoder_handle_t tx_encoder_{nullptr};
+  static bool IRAM_ATTR on_tx_timer_(gptimer_handle_t timer, const gptimer_alarm_event_data_t *event, void *arg);
+  static void IRAM_ATTR on_rx_edge_(void *arg);
+  bool arm_tx_timer_(uint64_t alarm_us);
+
+  gptimer_handle_t tx_timer_{nullptr};
+  volatile bool bus_dominant_{false};
+  volatile bool tx_result_ready_{false};
+  volatile ScsTxResult tx_result_{ScsTxResult::SUCCESS};
+  uint64_t next_alarm_us_{0};
 #endif
 
   ScsBticinoReceiver receiver_;
+  ScsBticinoTx transmitter_;
   InternalGPIOPin *rx_pin_{nullptr};
   InternalGPIOPin *tx_pin_{nullptr};
 };
