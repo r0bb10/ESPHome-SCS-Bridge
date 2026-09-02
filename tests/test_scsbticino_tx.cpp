@@ -33,6 +33,24 @@ void test_access_collision_rearbitrates() {
   assert(tx.active());
 }
 
+void test_released_cell_collision_stops_tx() {
+  ScsBticinoTx tx;
+  assert(tx.enqueue(short_frame(), ScsTxType::SHORT));
+  ScsTxStep step{};
+  ScsTxResult result{};
+  assert(tx.advance(false, &step, &result));  // Random access wait.
+  assert(tx.advance(false, &step, &result));  // Start-bit dominant pulse.
+  assert(step.drive_dominant);
+  assert(tx.advance(false, &step, &result));  // Start-bit released tail.
+  assert(!step.drive_dominant);
+  assert(step.check_released);
+
+  // A competing dominant level is only fatal while our scheduled cell is released.
+  assert(tx.advance(true, &step, &result));
+  assert(tx.active());
+  assert(tx.state() == ScsTxState::IDLE);
+}
+
 void test_response_timeout() {
   ScsBticinoTx tx;
   assert(tx.enqueue(short_frame(), ScsTxType::RESPONSE));
@@ -50,5 +68,6 @@ void test_response_timeout() {
 int main() {
   test_type_validation();
   test_access_collision_rearbitrates();
+  test_released_cell_collision_stops_tx();
   test_response_timeout();
 }
