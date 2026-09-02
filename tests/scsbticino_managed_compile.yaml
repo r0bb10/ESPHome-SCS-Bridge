@@ -21,9 +21,14 @@ scs_bticino:
 
 button:
   - platform: template
-    name: SCS Test Send
+    name: SCS Test Send Channel 23
     on_press:
       - scs_bticino.send:
           id: scs
           type: short
-          payload: [0x96, 0xA0, 0x6F, 0xA4]
+          payload: [0x96, 0xA3, 0x6F, 0xA4]
+      - delay: 2s
+      - scs_bticino.send:
+          id: scs
+          type: short
+          payload: [0x96, 0xA3, 0x6F, 0xA0]
