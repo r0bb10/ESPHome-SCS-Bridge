@@ -107,9 +107,20 @@ bool ScsBticinoController::send(const ScsBticinoData &frame, ScsTxType type) {
   return false;
 #else
   if (!this->transmitter_.enqueue(frame, type)) {
-    ESP_LOGW(TAG, "TX rejected: scheduler busy");
+    ESP_LOGW(TAG, "TX rejected: invalid frame or queue full");
     return false;
   }
+  this->start_queued_tx_();
+  return true;
+#endif
+}
+
+#ifdef USE_ESP32
+bool ScsBticinoController::start_queued_tx_() {
+  if (this->transmitter_.active() || !this->transmitter_.pending() || this->receiver_.bus_busy())
+    return false;
+  if (!this->transmitter_.start_next())
+    return false;
   ScsTxStep step{};
   ScsTxResult result{};
   if (!this->transmitter_.advance(false, &step, &result)) {
@@ -124,10 +135,12 @@ bool ScsBticinoController::send(const ScsBticinoData &frame, ScsTxType type) {
     ESP_LOGE(TAG, "TX timer could not arm");
     return false;
   }
-  ESP_LOGD(TAG, "TX started: type=%u payload=%s", static_cast<unsigned>(type), frame.to_string().c_str());
+  this->transmitter_.confirm_started();
+  ESP_LOGD(TAG, "TX started: type=%u payload=%s", static_cast<unsigned>(this->transmitter_.type()),
+           this->transmitter_.frame().to_string().c_str());
   return true;
-#endif
 }
+#endif
 
 void ScsBticinoController::loop() {
 #ifdef USE_ESP32
@@ -143,6 +156,7 @@ void ScsBticinoController::loop() {
   if (this->receiver_.poll(&frame)) {
     ESP_LOGD(TAG, "Received: %s", frame.to_string().c_str());
   }
+  this->start_queued_tx_();
 #endif
 }
 
@@ -183,6 +197,7 @@ bool IRAM_ATTR ScsBticinoController::on_tx_timer_(gptimer_handle_t timer, const 
 
 void IRAM_ATTR ScsBticinoController::on_rx_edge_(void *arg) {
   auto *controller = static_cast<ScsBticinoController *>(arg);
+  controller->receiver_.on_bus_edge();
   // Local TX dominant edges are visible on RX on some F422 interfaces. Only
   // an edge while waiting to claim an idle bus can cancel random access.
   if (controller->transmitter_.awaiting_access())

@@ -15,6 +15,8 @@ ScsBticinoData short_frame() {
   return frame;
 }
 
+void start(ScsBticinoTx *tx) { assert(tx->start_next()); }
+
 void append_run(std::vector<ScsBticinoRun> *runs, bool released, uint32_t duration_us) {
   if (!runs->empty() && runs->back().released == released) {
     runs->back().duration_us += duration_us;
@@ -26,6 +28,7 @@ void append_run(std::vector<ScsBticinoRun> *runs, bool released, uint32_t durati
 void test_type_validation() {
   ScsBticinoTx tx;
   assert(tx.enqueue(short_frame(), ScsTxType::SHORT));
+  start(&tx);
   ScsBticinoTx extended;
   assert(!extended.enqueue(short_frame(), ScsTxType::EXTENDED));
 }
@@ -33,6 +36,7 @@ void test_type_validation() {
 void test_access_collision_rearbitrates() {
   ScsBticinoTx tx;
   assert(tx.enqueue(short_frame(), ScsTxType::SHORT));
+  start(&tx);
   ScsTxStep step{};
   ScsTxResult result{};
   assert(tx.advance(false, &step, &result));
@@ -46,6 +50,7 @@ void test_access_collision_rearbitrates() {
 void test_released_cell_collision_stops_tx() {
   ScsBticinoTx tx;
   assert(tx.enqueue(short_frame(), ScsTxType::SHORT));
+  start(&tx);
   ScsTxStep step{};
   ScsTxResult result{};
   assert(tx.advance(false, &step, &result));  // Random access wait.
@@ -65,6 +70,7 @@ void test_released_cell_collision_stops_tx() {
 void test_dominant_tx_does_not_require_echo() {
   ScsBticinoTx tx;
   assert(tx.enqueue(short_frame(), ScsTxType::SHORT));
+  start(&tx);
   ScsTxStep step{};
   ScsTxResult result{};
   assert(tx.advance(false, &step, &result));
@@ -79,6 +85,7 @@ void test_dominant_tx_does_not_require_echo() {
 void test_every_byte_has_a_start_bit() {
   ScsBticinoTx tx;
   assert(tx.enqueue(short_frame(), ScsTxType::SHORT));
+  start(&tx);
   ScsTxStep step{};
   ScsTxResult result{};
   assert(tx.advance(false, &step, &result));  // Random access wait.
@@ -104,6 +111,7 @@ void test_scheduler_emits_the_codec_frame_runs() {
 
   ScsBticinoTx tx;
   assert(tx.enqueue(frame, ScsTxType::RESPONSE));
+  start(&tx);
   ScsTxStep step{};
   ScsTxResult result{};
   assert(tx.advance(false, &step, &result));  // Random access wait.
@@ -126,6 +134,7 @@ void test_scheduler_emits_the_codec_frame_runs() {
 void test_repeat_gap_starts_the_next_frame() {
   ScsBticinoTx tx;
   assert(tx.enqueue(short_frame(), ScsTxType::SHORT));
+  start(&tx);
   ScsTxStep step{};
   ScsTxResult result{};
   assert(tx.advance(false, &step, &result));
@@ -144,6 +153,7 @@ void test_repeat_gap_starts_the_next_frame() {
 void test_short_frame_completes_after_three_transmissions() {
   ScsBticinoTx tx;
   assert(tx.enqueue(short_frame(), ScsTxType::SHORT));
+  start(&tx);
   ScsTxStep step{};
   ScsTxResult result{};
   int guard = 400;
@@ -157,6 +167,7 @@ void test_short_frame_completes_after_three_transmissions() {
 void test_cancel_makes_scheduler_available() {
   ScsBticinoTx tx;
   assert(tx.enqueue(short_frame(), ScsTxType::SHORT));
+  start(&tx);
   ScsTxStep step{};
   ScsTxResult result{};
   assert(tx.advance(false, &step, &result));
@@ -166,12 +177,25 @@ void test_cancel_makes_scheduler_available() {
   assert(tx.enqueue(short_frame(), ScsTxType::SHORT));
 }
 
+void test_queue_reserves_one_slot() {
+  ScsBticinoTx tx;
+  for (int index = 0; index < 31; index++)
+    assert(tx.enqueue(short_frame(), ScsTxType::SHORT));
+  assert(!tx.enqueue(short_frame(), ScsTxType::SHORT));
+
+  assert(tx.start_next());
+  tx.confirm_started();
+  tx.cancel();
+  assert(tx.enqueue(short_frame(), ScsTxType::SHORT));
+}
+
 void test_response_timeout() {
   ScsBticinoTx tx;
   assert(tx.enqueue(short_frame(), ScsTxType::RESPONSE));
+  start(&tx);
   ScsTxStep step{};
   ScsTxResult result{};
-  int guard = 200;
+  int guard = 2000;
   while (tx.advance(false, &step, &result) && --guard > 0) {
   }
   assert(guard > 0);
@@ -190,5 +214,6 @@ int main() {
   test_repeat_gap_starts_the_next_frame();
   test_short_frame_completes_after_three_transmissions();
   test_cancel_makes_scheduler_available();
+  test_queue_reserves_one_slot();
   test_response_timeout();
 }

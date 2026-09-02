@@ -4,11 +4,29 @@ namespace esphome::scs_bticino {
 
 bool ScsBticinoTx::enqueue(const ScsBticinoData &frame, ScsTxType type) {
   const bool extended = frame.length == SCS_EXTENDED_SIZE;
-  if (this->queued_ || !frame.is_transmittable() ||
+  if (!frame.is_transmittable() ||
       (type == ScsTxType::EXTENDED || type == ScsTxType::EXTENDED_ALT ? !extended : extended))
     return false;
-  this->frame_ = frame;
-  this->type_ = type;
+
+  const uint8_t next = (this->queue_write_ + 1) % QUEUE_SLOTS;
+  if (next == this->queue_read_)
+    return false;
+  auto &entry = this->queue_[this->queue_write_];
+  entry.length = frame.length - 3;
+  entry.type = type;
+  for (uint8_t index = 0; index < entry.length; index++)
+    entry.payload[index] = frame.bytes[index + 1];
+  this->queue_write_ = next;
+  return true;
+}
+
+bool ScsBticinoTx::start_next() {
+  if (this->queued_ || !this->pending())
+    return false;
+  const auto &entry = this->queue_[this->queue_read_];
+  if (!ScsBticinoData::from_payload(this->frame_, entry.payload.data(), entry.length))
+    return false;
+  this->type_ = entry.type;
   this->state_ = ScsTxState::IDLE;
   this->collisions_ = 0;
   this->attempts_ = 0;
@@ -17,6 +35,8 @@ bool ScsBticinoTx::enqueue(const ScsBticinoData &frame, ScsTxType type) {
   this->queued_ = true;
   return true;
 }
+
+void ScsBticinoTx::confirm_started() { this->queue_read_ = (this->queue_read_ + 1) % QUEUE_SLOTS; }
 
 void ScsBticinoTx::cancel() {
   this->state_ = ScsTxState::IDLE;
@@ -117,7 +137,7 @@ bool ScsBticinoTx::advance(bool rx_dominant, ScsTxStep *step, ScsTxResult *resul
   if (this->state_ == ScsTxState::END) {
     if (this->type_ == ScsTxType::RESPONSE) {
       this->state_ = ScsTxState::WAIT_RESPONSE;
-      emit(82 * SCS_CELL_US, false, true);
+      emit(82 * SCS_CELL_US, false, false);
       return true;
     }
     if (this->attempts_ < 3) {
@@ -133,6 +153,12 @@ bool ScsBticinoTx::advance(bool rx_dominant, ScsTxStep *step, ScsTxResult *resul
     return false;
   }
   if (this->state_ == ScsTxState::WAIT_RESPONSE) {
+    if (this->attempts_ < RETRY_LIMITS[static_cast<uint8_t>(this->type_)]) {
+      this->byte_index_ = 0;
+      this->bit_index_ = 0;
+      this->state_ = ScsTxState::IDLE;
+      return this->advance(false, step, result);
+    }
     this->queued_ = false;
     *result = ScsTxResult::RESPONSE_TIMEOUT;
   }

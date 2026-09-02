@@ -29,6 +29,7 @@ class ScsBticinoController : public Component {
   static bool IRAM_ATTR on_tx_timer_(gptimer_handle_t timer, const gptimer_alarm_event_data_t *event, void *arg);
   static void IRAM_ATTR on_rx_edge_(void *arg);
   bool arm_tx_timer_(uint64_t alarm_us);
+  bool start_queued_tx_();
 
   gptimer_handle_t tx_timer_{nullptr};
   volatile bool access_contended_{false};

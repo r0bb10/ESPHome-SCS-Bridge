@@ -6,6 +6,7 @@
 #include "scsbticino_codec.h"
 
 #ifdef USE_ESP32
+#include "esp_attr.h"
 #include "driver/rmt_rx.h"
 #endif
 
@@ -26,6 +27,16 @@ class ScsBticinoReceiver {
 
   bool setup(int gpio_num);
   bool poll(ScsBticinoData *frame);
+  bool bus_busy() const {
+#ifdef USE_ESP32
+    return this->bus_busy_;
+#else
+    return false;
+#endif
+  }
+#ifdef USE_ESP32
+  void IRAM_ATTR on_bus_edge() { this->bus_busy_ = true; }
+#endif
   SetupError setup_error() const { return this->setup_error_; }
 
  protected:
@@ -57,6 +68,7 @@ class ScsBticinoReceiver {
   volatile uint8_t capture_read_{0};
   volatile uint8_t capture_write_{0};
   volatile bool capture_overflow_{false};
+  volatile bool bus_busy_{false};
   volatile esp_err_t receive_error_{ESP_OK};
 #endif
 };

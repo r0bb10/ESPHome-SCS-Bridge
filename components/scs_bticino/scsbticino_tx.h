@@ -28,10 +28,15 @@ struct ScsTxStep {
 class ScsBticinoTx {
  public:
   bool enqueue(const ScsBticinoData &frame, ScsTxType type);
+  bool start_next();
+  void confirm_started();
   bool SCS_BTICINO_IRAM_ATTR advance(bool rx_dominant, ScsTxStep *step, ScsTxResult *result);
   void SCS_BTICINO_IRAM_ATTR cancel();
   bool complete_response(ScsTxResult *result);
   bool active() const { return this->queued_; }
+  bool pending() const { return this->queue_read_ != this->queue_write_; }
+  const ScsBticinoData &frame() const { return this->frame_; }
+  ScsTxType type() const { return this->type_; }
   bool awaiting_access() const { return this->state_ == ScsTxState::WAIT_ACCESS; }
   ScsTxState state() const { return this->state_; }
 
@@ -39,7 +44,18 @@ class ScsBticinoTx {
   bool SCS_BTICINO_IRAM_ATTR collision_(ScsTxResult *result);
   uint32_t SCS_BTICINO_IRAM_ATTR access_delay_();
 
+  struct QueueEntry {
+    std::array<uint8_t, 8> payload{};
+    uint8_t length{0};
+    ScsTxType type{ScsTxType::SHORT};
+    uint8_t bus{0};
+  };
+
+  static constexpr uint8_t QUEUE_SLOTS = 32;
+  static constexpr uint8_t RETRY_LIMITS[] = {8, 3, 3, 3};
+
   ScsBticinoData frame_{};
+  std::array<QueueEntry, QUEUE_SLOTS> queue_{};
   ScsTxType type_{ScsTxType::SHORT};
   ScsTxState state_{ScsTxState::IDLE};
   uint32_t random_{1};
@@ -50,6 +66,8 @@ class ScsBticinoTx {
   bool release_pending_{false};
   bool expect_release_{false};
   bool queued_{false};
+  uint8_t queue_read_{0};
+  uint8_t queue_write_{0};
 };
 
 }  // namespace esphome::scs_bticino

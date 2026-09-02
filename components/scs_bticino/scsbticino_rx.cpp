@@ -91,6 +91,7 @@ bool IRAM_ATTR ScsBticinoReceiver::on_rx_done_(rmt_channel_handle_t channel, con
   receiver->receive_error_ = rmt_receive(channel, receiver->captures_[receiver->capture_write_].symbols,
                                           sizeof(receiver->captures_[receiver->capture_write_].symbols),
                                           &receiver->receive_config_);
+  receiver->bus_busy_ = false;
   return false;
 }
 
