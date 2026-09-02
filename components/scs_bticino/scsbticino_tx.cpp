@@ -18,6 +18,13 @@ bool ScsBticinoTx::enqueue(const ScsBticinoData &frame, ScsTxType type) {
   return true;
 }
 
+void ScsBticinoTx::cancel() {
+  this->state_ = ScsTxState::IDLE;
+  this->release_pending_ = false;
+  this->expect_release_ = false;
+  this->queued_ = false;
+}
+
 bool ScsBticinoTx::complete_response(ScsTxResult *result) {
   if (!this->queued_ || this->state_ != ScsTxState::WAIT_RESPONSE || result == nullptr)
     return false;
@@ -40,6 +47,8 @@ bool ScsBticinoTx::collision_(ScsTxResult *result) {
   }
   this->attempts_ = 0;
   this->state_ = ScsTxState::IDLE;
+  this->release_pending_ = false;
+  this->expect_release_ = false;
   return true;
 }
 
@@ -48,10 +57,11 @@ bool ScsBticinoTx::advance(bool rx_dominant, ScsTxStep *step, ScsTxResult *resul
     return false;
   *result = ScsTxResult::SUCCESS;
   if (this->expect_release_ && rx_dominant) {
-    return this->collision_(result);
+    if (!this->collision_(result))
+      return false;
   }
   const auto emit = [this, step](uint32_t delay_us, bool drive_dominant, bool check_released) {
-    *step = {delay_us, drive_dominant, check_released};
+    *step = {delay_us, drive_dominant};
     this->expect_release_ = check_released;
   };
   if (this->release_pending_) {
@@ -94,9 +104,14 @@ bool ScsBticinoTx::advance(bool rx_dominant, ScsTxStep *step, ScsTxResult *resul
     if (this->byte_index_ == this->frame_.length) {
       this->state_ = ScsTxState::END;
     } else {
-      this->state_ = ScsTxState::BYTE;
+      this->state_ = ScsTxState::INTER_BYTE;
     }
-    emit(SCS_CELL_US + (this->state_ == ScsTxState::BYTE ? SCS_INTER_BYTE_GAP_US : 0), false, true);
+    emit(SCS_CELL_US + (this->state_ == ScsTxState::INTER_BYTE ? SCS_INTER_BYTE_GAP_US : 0), false, true);
+    return true;
+  }
+  if (this->state_ == ScsTxState::INTER_BYTE) {
+    this->state_ = ScsTxState::START;
+    emit(SCS_DOMINANT_US, true, false);
     return true;
   }
   if (this->state_ == ScsTxState::END) {
@@ -106,7 +121,10 @@ bool ScsBticinoTx::advance(bool rx_dominant, ScsTxStep *step, ScsTxResult *resul
       return true;
     }
     if (this->attempts_ < 3) {
-      this->state_ = ScsTxState::IDLE;
+      this->attempts_++;
+      this->byte_index_ = 0;
+      this->bit_index_ = 0;
+      this->state_ = ScsTxState::WAIT_ACCESS;
       emit(84 * SCS_CELL_US, false, true);
       return true;
     }

@@ -5,16 +5,22 @@
 #include <array>
 #include <cstdint>
 
+#ifdef USE_ESP32
+#include "esp_attr.h"
+#define SCS_BTICINO_IRAM_ATTR IRAM_ATTR
+#else
+#define SCS_BTICINO_IRAM_ATTR
+#endif
+
 namespace esphome::scs_bticino {
 
 enum class ScsTxType : uint8_t { RESPONSE = 0, SHORT = 1, EXTENDED = 2, EXTENDED_ALT = 3 };
 enum class ScsTxResult : uint8_t { SUCCESS = 0, RESPONSE_TIMEOUT = 2, COLLISION_LIMIT = 3 };
-enum class ScsTxState : uint8_t { IDLE, WAIT_ACCESS, START, BYTE, STOP, END, WAIT_RESPONSE };
+enum class ScsTxState : uint8_t { IDLE, WAIT_ACCESS, START, BYTE, STOP, INTER_BYTE, END, WAIT_RESPONSE };
 
 struct ScsTxStep {
   uint32_t delay_us;
   bool drive_dominant;
-  bool check_released;
 };
 
 // The timer backend calls advance() at every returned delay. A collision is
@@ -22,15 +28,16 @@ struct ScsTxStep {
 class ScsBticinoTx {
  public:
   bool enqueue(const ScsBticinoData &frame, ScsTxType type);
-  bool advance(bool rx_dominant, ScsTxStep *step, ScsTxResult *result);
+  bool SCS_BTICINO_IRAM_ATTR advance(bool rx_dominant, ScsTxStep *step, ScsTxResult *result);
+  void SCS_BTICINO_IRAM_ATTR cancel();
   bool complete_response(ScsTxResult *result);
   bool active() const { return this->queued_; }
   bool awaiting_access() const { return this->state_ == ScsTxState::WAIT_ACCESS; }
   ScsTxState state() const { return this->state_; }
 
  protected:
-  bool collision_(ScsTxResult *result);
-  uint32_t access_delay_();
+  bool SCS_BTICINO_IRAM_ATTR collision_(ScsTxResult *result);
+  uint32_t SCS_BTICINO_IRAM_ATTR access_delay_();
 
   ScsBticinoData frame_{};
   ScsTxType type_{ScsTxType::SHORT};
@@ -46,3 +53,5 @@ class ScsBticinoTx {
 };
 
 }  // namespace esphome::scs_bticino
+
+#undef SCS_BTICINO_IRAM_ATTR

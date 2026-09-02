@@ -33,8 +33,8 @@ class ScsBticinoController : public Component {
   gptimer_handle_t tx_timer_{nullptr};
   volatile bool access_contended_{false};
   volatile bool tx_result_ready_{false};
+  volatile bool tx_timer_fault_{false};
   volatile ScsTxResult tx_result_{ScsTxResult::SUCCESS};
-  uint64_t next_alarm_us_{0};
 #endif
 
   ScsBticinoReceiver receiver_;

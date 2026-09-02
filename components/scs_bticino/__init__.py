@@ -2,6 +2,7 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import pins
 from esphome import automation
+from esphome.components import esp32
 from esphome.const import CONF_ID
 from esphome.core import ID
 
@@ -14,19 +15,38 @@ scs_bticino_ns = cg.esphome_ns.namespace("scs_bticino")
 ScsBticinoController = scs_bticino_ns.class_("ScsBticinoController", cg.Component)
 ScsBticinoSendAction = scs_bticino_ns.class_("ScsBticinoSendAction", automation.Action)
 
+
+def _non_inverted_input_pin(value):
+    config = pins.internal_gpio_input_pin_schema(value)
+    if config.get("inverted", False):
+        raise cv.Invalid("scs_bticino RX pin cannot be inverted")
+    return config
+
+
+def _non_inverted_output_pin(value):
+    config = pins.internal_gpio_output_pin_schema(value)
+    if config.get("inverted", False):
+        raise cv.Invalid("scs_bticino TX pin cannot be inverted")
+    return config
+
 CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(ScsBticinoController),
-            cv.Required(CONF_RX_PIN): pins.internal_gpio_input_pin_schema,
-            cv.Required(CONF_TX_PIN): pins.internal_gpio_output_pin_schema,
+            cv.Required(CONF_RX_PIN): _non_inverted_input_pin,
+            cv.Required(CONF_TX_PIN): _non_inverted_output_pin,
         }
     ).extend(cv.COMPONENT_SCHEMA),
     cv.only_on_esp32,
+    cv.only_with_framework("esp-idf"),
 )
 
 
 async def to_code(config):
+    esp32.add_idf_sdkconfig_option("CONFIG_GPIO_CTRL_FUNC_IN_IRAM", True)
+    esp32.add_idf_sdkconfig_option("CONFIG_GPTIMER_ISR_HANDLER_IN_IRAM", True)
+    esp32.add_idf_sdkconfig_option("CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM", True)
+    esp32.add_idf_sdkconfig_option("CONFIG_RMT_RX_ISR_CACHE_SAFE", True)
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     cg.add(var.set_rx_pin(await cg.gpio_pin_expression(config[CONF_RX_PIN])))
