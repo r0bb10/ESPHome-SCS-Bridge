@@ -15,5 +15,15 @@ external_components:
     components: [scs_bticino]
 
 scs_bticino:
+  id: scs
   rx_pin: GPIO4
   tx_pin: GPIO3
+
+button:
+  - platform: template
+    name: SCS Test Send
+    on_press:
+      - scs_bticino.send:
+          id: scs
+          type: short
+          payload: [0x96, 0xA0, 0x6F, 0xA4]

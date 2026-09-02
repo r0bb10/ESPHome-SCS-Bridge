@@ -2,6 +2,7 @@
 
 #include "esphome/core/component.h"
 #include "esphome/core/gpio.h"
+#include "esphome/core/automation.h"
 
 #include "scsbticino_rx.h"
 #include "scsbticino_tx.h"
@@ -40,6 +41,27 @@ class ScsBticinoController : public Component {
   ScsBticinoTx transmitter_;
   InternalGPIOPin *rx_pin_{nullptr};
   InternalGPIOPin *tx_pin_{nullptr};
+};
+
+template<typename... Ts> class ScsBticinoSendAction : public Action<Ts...> {
+ public:
+  void set_parent(ScsBticinoController *parent) { this->parent_ = parent; }
+  void set_payload(const uint8_t *payload, uint8_t length) {
+    this->payload_ = payload;
+    this->payload_length_ = length;
+  }
+  void set_type(uint8_t type) { this->type_ = static_cast<ScsTxType>(type); }
+  void play(Ts... x) override {
+    ScsBticinoData frame;
+    if (this->parent_ != nullptr && ScsBticinoData::from_payload(frame, this->payload_, this->payload_length_))
+      this->parent_->send(frame, this->type_);
+  }
+
+ protected:
+  ScsBticinoController *parent_{nullptr};
+  const uint8_t *payload_{nullptr};
+  uint8_t payload_length_{0};
+  ScsTxType type_{ScsTxType::SHORT};
 };
 
 }  // namespace esphome::scs_bticino
