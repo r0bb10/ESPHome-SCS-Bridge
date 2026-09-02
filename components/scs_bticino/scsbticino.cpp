@@ -106,8 +106,11 @@ bool IRAM_ATTR ScsBticinoController::on_tx_timer_(gptimer_handle_t timer, const 
   auto *controller = static_cast<ScsBticinoController *>(arg);
   ScsTxStep step{};
   ScsTxResult result{};
-  const bool active = controller->transmitter_.advance(controller->bus_dominant_, &step, &result);
-  controller->bus_dominant_ = false;
+  const bool rx_dominant = controller->transmitter_.awaiting_access()
+                               ? controller->access_contended_
+                               : gpio_get_level(static_cast<gpio_num_t>(controller->rx_pin_->get_pin())) != 0;
+  controller->access_contended_ = false;
+  const bool active = controller->transmitter_.advance(rx_dominant, &step, &result);
   if (!active) {
     controller->tx_pin_->digital_write(false);
     controller->tx_result_ = result;
@@ -122,7 +125,11 @@ bool IRAM_ATTR ScsBticinoController::on_tx_timer_(gptimer_handle_t timer, const 
 }
 
 void IRAM_ATTR ScsBticinoController::on_rx_edge_(void *arg) {
-  static_cast<ScsBticinoController *>(arg)->bus_dominant_ = true;
+  auto *controller = static_cast<ScsBticinoController *>(arg);
+  // Local TX dominant edges are visible on RX on some F422 interfaces. Only
+  // an edge while waiting to claim an idle bus can cancel random access.
+  if (controller->transmitter_.awaiting_access())
+    controller->access_contended_ = true;
 }
 #endif
 

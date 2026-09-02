@@ -25,6 +25,7 @@ class ScsBticinoTx {
   bool advance(bool rx_dominant, ScsTxStep *step, ScsTxResult *result);
   bool complete_response(ScsTxResult *result);
   bool active() const { return this->queued_; }
+  bool awaiting_access() const { return this->state_ == ScsTxState::WAIT_ACCESS; }
   ScsTxState state() const { return this->state_; }
 
  protected:

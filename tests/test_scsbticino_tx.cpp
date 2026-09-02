@@ -51,6 +51,20 @@ void test_released_cell_collision_stops_tx() {
   assert(tx.state() == ScsTxState::IDLE);
 }
 
+void test_dominant_tx_does_not_require_echo() {
+  ScsBticinoTx tx;
+  assert(tx.enqueue(short_frame(), ScsTxType::SHORT));
+  ScsTxStep step{};
+  ScsTxResult result{};
+  assert(tx.advance(false, &step, &result));
+  assert(tx.advance(false, &step, &result));
+  assert(step.drive_dominant);
+  // The OEM only checks released checkpoints. Missing dominant readback is not
+  // a collision, so the start pulse advances normally with RX released.
+  assert(tx.advance(false, &step, &result));
+  assert(tx.state() == ScsTxState::BYTE);
+}
+
 void test_response_timeout() {
   ScsBticinoTx tx;
   assert(tx.enqueue(short_frame(), ScsTxType::RESPONSE));
@@ -69,5 +83,6 @@ int main() {
   test_type_validation();
   test_access_collision_rearbitrates();
   test_released_cell_collision_stops_tx();
+  test_dominant_tx_does_not_require_echo();
   test_response_timeout();
 }

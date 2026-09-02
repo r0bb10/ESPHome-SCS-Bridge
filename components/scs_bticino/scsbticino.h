@@ -30,7 +30,7 @@ class ScsBticinoController : public Component {
   bool arm_tx_timer_(uint64_t alarm_us);
 
   gptimer_handle_t tx_timer_{nullptr};
-  volatile bool bus_dominant_{false};
+  volatile bool access_contended_{false};
   volatile bool tx_result_ready_{false};
   volatile ScsTxResult tx_result_{ScsTxResult::SUCCESS};
   uint64_t next_alarm_us_{0};
