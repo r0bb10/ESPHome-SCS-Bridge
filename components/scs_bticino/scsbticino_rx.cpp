@@ -72,9 +72,10 @@ bool ScsBticinoReceiver::poll(ScsBticinoData *frame) {
   const uint8_t capture_index = this->capture_read_;
   const auto &capture = this->captures_[capture_index];
   const size_t symbol_count = capture.symbol_count;
-  this->capture_read_ = (capture_index + 1) % RX_CAPTURE_CAPACITY;
   std::vector<ScsBticinoRun> runs;
   this->normalize_(capture.symbols, symbol_count, &runs);
+  // Do not release this slot to the RMT ISR until normalization is complete.
+  this->capture_read_ = (capture_index + 1) % RX_CAPTURE_CAPACITY;
   ESP_LOGD(TAG, "RX capture: symbols=%u runs=%u", static_cast<unsigned>(symbol_count),
            static_cast<unsigned>(runs.size()));
   const bool decoded = ScsBticinoCodec::decode(runs, frame);
