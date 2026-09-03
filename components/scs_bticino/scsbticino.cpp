@@ -285,6 +285,8 @@ void ScsBticinoController::loop() {
   ScsBticinoData frame;
   if (this->receiver_.poll(&frame)) {
     ESP_LOGI(TAG_RX, "RX %s", frame.to_string().c_str());
+    if (this->telegram_sensor_ != nullptr)
+      this->telegram_sensor_->publish_state(frame.to_string());
     if (frame.is_ack() && this->transmitter_.state() == ScsTxState::WAIT_RESPONSE) {
       ScsTxResult result{};
       if (this->transmitter_.complete_response(&result)) {

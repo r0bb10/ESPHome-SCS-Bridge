@@ -3,6 +3,7 @@
 #include "esphome/core/component.h"
 #include "esphome/core/gpio.h"
 #include "esphome/core/automation.h"
+#include "esphome/components/text_sensor/text_sensor.h"
 
 #include "scsbticino_rx.h"
 #include "scsbticino_tx.h"
@@ -19,6 +20,7 @@ class ScsBticinoController : public Component {
  public:
   void set_rx_pin(InternalGPIOPin *pin) { this->rx_pin_ = pin; }
   void set_tx_pin(InternalGPIOPin *pin) { this->tx_pin_ = pin; }
+  void set_telegram_sensor(text_sensor::TextSensor *sensor) { this->telegram_sensor_ = sensor; }
 
   void setup() override;
   void loop() override;
@@ -77,6 +79,7 @@ class ScsBticinoController : public Component {
   bool pending_local_ack_{false};
   InternalGPIOPin *rx_pin_{nullptr};
   InternalGPIOPin *tx_pin_{nullptr};
+  text_sensor::TextSensor *telegram_sensor_{nullptr};
 };
 
 template<typename... Ts> class ScsBticinoSendAction : public Action<Ts...> {

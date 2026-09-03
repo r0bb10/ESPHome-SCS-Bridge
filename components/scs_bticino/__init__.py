@@ -2,8 +2,8 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import pins
 from esphome import automation
-from esphome.components import esp32
-from esphome.const import CONF_ID
+from esphome.components import esp32, text_sensor
+from esphome.const import CONF_ENTITY_CATEGORY, CONF_ID, CONF_NAME, ENTITY_CATEGORY_DIAGNOSTIC
 from esphome.core import ID
 
 CONF_RX_PIN = "rx_pin"
@@ -14,6 +14,8 @@ CONF_TYPE = "type"
 scs_bticino_ns = cg.esphome_ns.namespace("scs_bticino")
 ScsBticinoController = scs_bticino_ns.class_("ScsBticinoController", cg.Component)
 ScsBticinoSendAction = scs_bticino_ns.class_("ScsBticinoSendAction", automation.Action)
+
+AUTO_LOAD = ["text_sensor"]
 
 
 def _non_inverted_input_pin(value):
@@ -51,6 +53,19 @@ async def to_code(config):
     await cg.register_component(var, config)
     cg.add(var.set_rx_pin(await cg.gpio_pin_expression(config[CONF_RX_PIN])))
     cg.add(var.set_tx_pin(await cg.gpio_pin_expression(config[CONF_TX_PIN])))
+    telegram_config = text_sensor.text_sensor_schema(
+        text_sensor.TextSensor,
+        entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        icon="mdi:message-text-outline",
+    )(
+        {
+            CONF_ID: ID(f"{config[CONF_ID].id}_telegram", is_declaration=True, type=text_sensor.TextSensor),
+            CONF_NAME: "Telegram",
+            CONF_ENTITY_CATEGORY: ENTITY_CATEGORY_DIAGNOSTIC,
+        }
+    )
+    telegram = await text_sensor.new_text_sensor(telegram_config)
+    cg.add(var.set_telegram_sensor(telegram))
 
 
 SEND_SCHEMA = cv.Schema(
