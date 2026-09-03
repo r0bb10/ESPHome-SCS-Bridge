@@ -7,6 +7,8 @@
 #include "scsbticino_rx.h"
 #include "scsbticino_tx.h"
 
+#include <array>
+
 #ifdef USE_ESP32
 #include "driver/gptimer.h"
 #endif
@@ -32,12 +34,34 @@ class ScsBticinoController : public Component {
   bool start_queued_tx_();
   bool start_tx_(bool local_ack);
   bool is_locally_addressed_(const ScsBticinoData &frame) const;
+  void push_tx_trace_(uint8_t kind);
+  void drain_tx_traces_();
+  void set_tx_defer_reason_(uint8_t reason);
+
+  static constexpr uint8_t TX_TRACE_ATTEMPT = 0;
+  static constexpr uint8_t TX_TRACE_COLLISION = 1;
+  static constexpr uint8_t TX_TRACE_CAPACITY = 8;
+  struct TxTrace {
+    std::array<uint8_t, SCS_EXTENDED_SIZE> bytes{};
+    uint8_t length{0};
+    uint8_t kind{0};
+    uint8_t type{0};
+    uint8_t attempts{0};
+    uint16_t collisions{0};
+    bool local_ack{false};
+  };
 
   gptimer_handle_t tx_timer_{nullptr};
   volatile bool access_contended_{false};
   volatile bool tx_result_ready_{false};
   volatile bool tx_timer_fault_{false};
   volatile ScsTxResult tx_result_{ScsTxResult::SUCCESS};
+  volatile esp_err_t tx_timer_error_{ESP_OK};
+  std::array<TxTrace, TX_TRACE_CAPACITY> tx_traces_{};
+  volatile uint8_t tx_trace_read_{0};
+  volatile uint8_t tx_trace_write_{0};
+  volatile bool tx_trace_overflow_{false};
+  uint8_t tx_defer_reason_{0};
 #endif
 
   ScsBticinoReceiver receiver_;

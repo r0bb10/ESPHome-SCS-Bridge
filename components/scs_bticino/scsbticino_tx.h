@@ -38,8 +38,12 @@ class ScsBticinoTx {
   bool pending() const { return this->queue_read_ != this->queue_write_; }
   bool local_ack() const { return this->local_ack_; }
   bool ready(bool bus_busy) const { return !this->queued_ && this->pending() && !bus_busy; }
+  uint8_t queue_depth() const { return (this->queue_write_ + QUEUE_SLOTS - this->queue_read_) % QUEUE_SLOTS; }
   const ScsBticinoData &frame() const { return this->frame_; }
   ScsTxType type() const { return this->type_; }
+  uint8_t attempts() const { return this->attempts_; }
+  uint16_t collisions() const { return this->collisions_; }
+  bool checking_released() const { return this->expect_release_; }
   bool awaiting_access() const { return this->state_ == ScsTxState::WAIT_ACCESS; }
   ScsTxState state() const { return this->state_; }
 

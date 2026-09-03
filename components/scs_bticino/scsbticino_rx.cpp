@@ -45,6 +45,8 @@ bool ScsBticinoReceiver::setup(int gpio_num) {
   if (!this->start_receive_()) {
     return false;
   }
+  ESP_LOGD(TAG, "RX RMT ready: gpio=%d resolution=%uHz symbols=%u", gpio_num, 1000000U,
+           static_cast<unsigned>(RX_SYMBOL_CAPACITY));
   return true;
 #endif
 }
@@ -69,9 +71,13 @@ bool ScsBticinoReceiver::poll(ScsBticinoData *frame) {
   const auto &capture = this->captures_[capture_index];
   const size_t symbol_count = capture.symbol_count;
   this->capture_read_ = (capture_index + 1) % RX_CAPTURE_CAPACITY;
+  ESP_LOGD(TAG, "RX capture: symbols=%u", static_cast<unsigned>(symbol_count));
   std::vector<ScsBticinoRun> runs;
   this->normalize_(capture.symbols, symbol_count, &runs);
   const bool decoded = ScsBticinoCodec::decode(runs, frame);
+  if (!decoded) {
+    ESP_LOGD(TAG, "RX discard: symbols=%u reason=decode", static_cast<unsigned>(symbol_count));
+  }
   return decoded;
 #endif
 }
@@ -88,11 +94,12 @@ bool ScsBticinoReceiver::bus_busy() {
   if (edge_count != this->observed_bus_edge_count_) {
     this->observed_bus_edge_count_ = edge_count;
     this->bus_busy_until_ms_ = now + BUS_BUSY_HOLD_MS;
+    ESP_LOGD(TAG, "RX bus busy: edges=%u", static_cast<unsigned>(edge_count));
   }
   if (static_cast<int32_t>(this->bus_busy_until_ms_ - now) > 0)
     return true;
 
-  // An incomplete RMT capture must not indefinitely suppress queued TX.
+  ESP_LOGD(TAG, "RX bus busy expired: no edge for %ums", static_cast<unsigned>(BUS_BUSY_HOLD_MS));
   this->bus_busy_ = false;
   return false;
 #endif
