@@ -168,8 +168,10 @@ bool ScsBticinoController::start_queued_tx_() {
 }
 
 bool ScsBticinoController::start_tx_(bool local_ack) {
-  if (local_ack ? !this->transmitter_.start_ack() : !this->transmitter_.start_next())
+  if (local_ack ? !this->transmitter_.start_ack() : !this->transmitter_.start_next()) {
+    ESP_LOGE(TAG_TX, "TX start failed: reason=%s", local_ack ? "local_ack_state" : "queue_state");
     return false;
+  }
   ScsTxStep step{};
   ScsTxResult result{};
   if (!this->transmitter_.advance(false, &step, &result)) {
@@ -192,10 +194,11 @@ bool ScsBticinoController::start_tx_(bool local_ack) {
   return true;
 }
 
-void IRAM_ATTR ScsBticinoController::push_tx_trace_(uint8_t kind) {
+void ScsBticinoController::push_tx_trace_(uint8_t kind) {
   const uint8_t next = (this->tx_trace_write_ + 1) % TX_TRACE_CAPACITY;
   if (next == this->tx_trace_read_) {
     this->tx_trace_overflow_ = true;
+    this->tx_trace_dropped_++;
     return;
   }
   auto &trace = this->tx_traces_[this->tx_trace_write_];
@@ -213,8 +216,10 @@ void IRAM_ATTR ScsBticinoController::push_tx_trace_(uint8_t kind) {
 
 void ScsBticinoController::drain_tx_traces_() {
   if (this->tx_trace_overflow_) {
+    const uint16_t dropped = this->tx_trace_dropped_;
     this->tx_trace_overflow_ = false;
-    ESP_LOGW(TAG_TX, "TX trace overflow");
+    this->tx_trace_dropped_ = 0;
+    ESP_LOGW(TAG_TX, "TX trace overflow: dropped=%u", dropped);
   }
   while (this->tx_trace_read_ != this->tx_trace_write_) {
     const TxTrace trace = this->tx_traces_[this->tx_trace_read_];
@@ -228,8 +233,10 @@ void ScsBticinoController::drain_tx_traces_() {
       ESP_LOGD(TAG_TX, "TX attempt: type=%s number=%u collisions=%u local_ack=%s",
                trace.local_ack ? "local_ack" : tx_type_name(static_cast<ScsTxType>(trace.type)),
                trace.attempts, trace.collisions, trace.local_ack ? "yes" : "no");
-    } else {
+    } else if (trace.kind == TX_TRACE_COLLISION) {
       ESP_LOGD(TAG_TX, "TX collision: frame=%s count=%u", frame.to_string().c_str(), trace.collisions);
+    } else {
+      ESP_LOGD(TAG_TX, "TX wait_response: attempt=%u", trace.attempts);
     }
   }
 }
@@ -266,11 +273,12 @@ void ScsBticinoController::loop() {
   if (this->tx_result_ready_) {
     this->tx_result_ready_ = false;
     const char *result = tx_result_name(this->tx_result_);
+    const char *type = this->tx_result_local_ack_ ? "local_ack" : tx_type_name(this->transmitter_.type());
     if (this->tx_result_ == ScsTxResult::SUCCESS) {
-      ESP_LOGD(TAG_TX, "TX result: %s type=%s attempts=%u collisions=%u", result, tx_type_name(this->transmitter_.type()),
+      ESP_LOGD(TAG_TX, "TX result: %s type=%s attempts=%u collisions=%u", result, type,
                this->transmitter_.attempts(), this->transmitter_.collisions());
     } else {
-      ESP_LOGW(TAG_TX, "TX result: %s type=%s attempts=%u collisions=%u", result, tx_type_name(this->transmitter_.type()),
+      ESP_LOGW(TAG_TX, "TX result: %s type=%s attempts=%u collisions=%u", result, type,
                this->transmitter_.attempts(), this->transmitter_.collisions());
     }
   }
@@ -282,6 +290,7 @@ void ScsBticinoController::loop() {
       if (this->transmitter_.complete_response(&result)) {
         gptimer_stop(this->tx_timer_);
         this->tx_result_ = result;
+        this->tx_result_local_ack_ = false;
         this->tx_result_ready_ = true;
         ESP_LOGD(TAG_RX, "RX A5: complete type-0 response");
       }
@@ -326,6 +335,7 @@ bool IRAM_ATTR ScsBticinoController::on_tx_timer_(gptimer_handle_t timer, const 
   ScsTxResult result{};
   const ScsTxState previous_state = controller->transmitter_.state();
   const bool checking_released = controller->transmitter_.checking_released();
+  const bool local_ack = controller->transmitter_.local_ack();
   const bool rx_dominant = controller->transmitter_.awaiting_access()
                                ? controller->access_contended_
                                 : gpio_get_level(static_cast<gpio_num_t>(controller->rx_pin_->get_pin())) == 0;
@@ -335,9 +345,12 @@ bool IRAM_ATTR ScsBticinoController::on_tx_timer_(gptimer_handle_t timer, const 
     controller->push_tx_trace_(TX_TRACE_COLLISION);
   if (previous_state == ScsTxState::WAIT_ACCESS && controller->transmitter_.state() == ScsTxState::START)
     controller->push_tx_trace_(TX_TRACE_ATTEMPT);
+  if (previous_state == ScsTxState::END && controller->transmitter_.state() == ScsTxState::WAIT_RESPONSE)
+    controller->push_tx_trace_(TX_TRACE_WAIT_RESPONSE);
   if (!active) {
     gpio_set_level(static_cast<gpio_num_t>(controller->tx_pin_->get_pin()), 0);
     controller->tx_result_ = result;
+    controller->tx_result_local_ack_ = local_ack;
     controller->tx_result_ready_ = true;
     return false;
   }

@@ -61,8 +61,10 @@ bool ScsBticinoReceiver::poll(ScsBticinoData *frame) {
     return false;
   }
   if (this->capture_overflow_) {
-    ESP_LOGW(TAG, "RMT RX capture buffer overflow");
+    const uint16_t dropped = this->capture_dropped_;
     this->capture_overflow_ = false;
+    this->capture_dropped_ = 0;
+    ESP_LOGW(TAG, "RMT RX capture overflow: dropped=%u", dropped);
   }
   if (this->capture_read_ == this->capture_write_ || frame == nullptr)
     return false;
@@ -71,12 +73,14 @@ bool ScsBticinoReceiver::poll(ScsBticinoData *frame) {
   const auto &capture = this->captures_[capture_index];
   const size_t symbol_count = capture.symbol_count;
   this->capture_read_ = (capture_index + 1) % RX_CAPTURE_CAPACITY;
-  ESP_LOGD(TAG, "RX capture: symbols=%u", static_cast<unsigned>(symbol_count));
   std::vector<ScsBticinoRun> runs;
   this->normalize_(capture.symbols, symbol_count, &runs);
+  ESP_LOGD(TAG, "RX capture: symbols=%u runs=%u", static_cast<unsigned>(symbol_count),
+           static_cast<unsigned>(runs.size()));
   const bool decoded = ScsBticinoCodec::decode(runs, frame);
   if (!decoded) {
-    ESP_LOGD(TAG, "RX discard: symbols=%u reason=decode", static_cast<unsigned>(symbol_count));
+    ESP_LOGD(TAG, "RX discard: symbols=%u runs=%u reason=decode", static_cast<unsigned>(symbol_count),
+             static_cast<unsigned>(runs.size()));
   }
   return decoded;
 #endif
@@ -116,6 +120,7 @@ bool IRAM_ATTR ScsBticinoReceiver::on_rx_done_(rmt_channel_handle_t channel, con
       receiver->capture_write_ = next_capture;
     } else {
       receiver->capture_overflow_ = true;
+      receiver->capture_dropped_++;
     }
   }
   receiver->receive_error_ = rmt_receive(channel, receiver->captures_[receiver->capture_write_].symbols,

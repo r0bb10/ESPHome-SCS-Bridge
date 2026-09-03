@@ -66,6 +66,7 @@ class ScsBticinoReceiver {
   volatile uint8_t capture_read_{0};
   volatile uint8_t capture_write_{0};
   volatile bool capture_overflow_{false};
+  volatile uint16_t capture_dropped_{0};
   volatile bool bus_busy_{false};
   volatile uint32_t bus_edge_count_{0};
   uint32_t observed_bus_edge_count_{0};
