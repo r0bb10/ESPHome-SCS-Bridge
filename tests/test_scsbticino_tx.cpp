@@ -284,6 +284,42 @@ void test_response_timeout() {
   assert(result == ScsTxResult::RESPONSE_TIMEOUT);
 }
 
+void test_received_ack_completes_only_waiting_response() {
+  ScsBticinoTx tx;
+  assert(tx.enqueue(short_frame(), ScsTxType::RESPONSE));
+  start(&tx);
+  ScsTxStep step{};
+  ScsTxResult result{};
+  assert(!tx.complete_response(&result));
+  while (tx.state() != ScsTxState::END)
+    assert(tx.advance(false, &step, &result));
+  assert(tx.advance(false, &step, &result));
+  assert(tx.state() == ScsTxState::WAIT_RESPONSE);
+  assert(tx.complete_response(&result));
+  assert(result == ScsTxResult::SUCCESS);
+  assert(!tx.active());
+}
+
+void test_local_ack_transmits_once() {
+  ScsBticinoTx tx;
+  assert(tx.start_ack());
+  ScsTxStep step{};
+  ScsTxResult result{};
+  int transmissions = 0;
+  int guard = 100;
+  while (--guard > 0) {
+    const ScsTxState state = tx.state();
+    if (!tx.advance(false, &step, &result))
+      break;
+    if (state == ScsTxState::WAIT_ACCESS && tx.state() == ScsTxState::START && step.drive_dominant)
+      transmissions++;
+  }
+  assert(guard > 0);
+  assert(transmissions == 1);
+  assert(result == ScsTxResult::SUCCESS);
+  assert(!tx.active());
+}
+
 }  // namespace
 
 int main() {
@@ -303,4 +339,6 @@ int main() {
   test_queue_preserves_fifo_order_and_failed_start_entry();
   test_queue_wraps_without_reordering();
   test_response_timeout();
+  test_received_ack_completes_only_waiting_response();
+  test_local_ack_transmits_once();
 }

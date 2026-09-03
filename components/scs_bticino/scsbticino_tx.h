@@ -29,12 +29,14 @@ class ScsBticinoTx {
  public:
   bool enqueue(const ScsBticinoData &frame, ScsTxType type);
   bool start_next();
+  bool start_ack();
   void confirm_started();
   bool SCS_BTICINO_IRAM_ATTR advance(bool rx_dominant, ScsTxStep *step, ScsTxResult *result);
   void SCS_BTICINO_IRAM_ATTR cancel();
   bool complete_response(ScsTxResult *result);
   bool active() const { return this->queued_; }
   bool pending() const { return this->queue_read_ != this->queue_write_; }
+  bool local_ack() const { return this->local_ack_; }
   bool ready(bool bus_busy) const { return !this->queued_ && this->pending() && !bus_busy; }
   const ScsBticinoData &frame() const { return this->frame_; }
   ScsTxType type() const { return this->type_; }
@@ -67,6 +69,7 @@ class ScsBticinoTx {
   bool release_pending_{false};
   bool expect_release_{false};
   bool queued_{false};
+  bool local_ack_{false};
   uint8_t queue_read_{0};
   uint8_t queue_write_{0};
 };

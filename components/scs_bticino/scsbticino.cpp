@@ -117,9 +117,17 @@ bool ScsBticinoController::send(const ScsBticinoData &frame, ScsTxType type) {
 
 #ifdef USE_ESP32
 bool ScsBticinoController::start_queued_tx_() {
-  if (!this->transmitter_.ready(this->receiver_.bus_busy()))
+  if (this->transmitter_.active() || this->receiver_.bus_busy())
     return false;
-  if (!this->transmitter_.start_next())
+  if (this->pending_local_ack_)
+    return this->start_tx_(true);
+  if (!this->transmitter_.pending())
+    return false;
+  return this->start_tx_(false);
+}
+
+bool ScsBticinoController::start_tx_(bool local_ack) {
+  if (local_ack ? !this->transmitter_.start_ack() : !this->transmitter_.start_next())
     return false;
   ScsTxStep step{};
   ScsTxResult result{};
@@ -135,10 +143,23 @@ bool ScsBticinoController::start_queued_tx_() {
     ESP_LOGE(TAG, "TX timer could not arm");
     return false;
   }
-  this->transmitter_.confirm_started();
+  if (local_ack)
+    this->pending_local_ack_ = false;
+  else
+    this->transmitter_.confirm_started();
   ESP_LOGD(TAG, "TX started: type=%u payload=%s", static_cast<unsigned>(this->transmitter_.type()),
            this->transmitter_.frame().to_string().c_str());
   return true;
+}
+
+bool ScsBticinoController::is_locally_addressed_(const ScsBticinoData &frame) const {
+  const uint8_t system = this->identity_.system & 0x0F;
+  if (!frame.is_valid() || system == 0 || (frame.bytes[3] >> 4) != system)
+    return false;
+  if (system == 1 || system == 4)
+    return this->identity_.address == frame.bytes[1];
+  return (frame.bytes[1] & 0xF0) == 0x80 && (this->identity_.address & 0x0FFF) ==
+                                                ((frame.bytes[3] & 0x0F) << 8 | frame.bytes[2]);
 }
 #endif
 
@@ -155,6 +176,16 @@ void ScsBticinoController::loop() {
   ScsBticinoData frame;
   if (this->receiver_.poll(&frame)) {
     ESP_LOGD(TAG, "Received: %s", frame.to_string().c_str());
+    if (frame.is_ack() && this->transmitter_.state() == ScsTxState::WAIT_RESPONSE) {
+      ScsTxResult result{};
+      if (this->transmitter_.complete_response(&result)) {
+        gptimer_stop(this->tx_timer_);
+        this->tx_result_ = result;
+        this->tx_result_ready_ = true;
+      }
+    } else if (this->is_locally_addressed_(frame)) {
+      this->pending_local_ack_ = true;
+    }
   }
   this->start_queued_tx_();
 #endif

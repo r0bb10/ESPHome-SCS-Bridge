@@ -30,6 +30,8 @@ class ScsBticinoController : public Component {
   static void IRAM_ATTR on_rx_edge_(void *arg);
   bool arm_tx_timer_(uint64_t alarm_us);
   bool start_queued_tx_();
+  bool start_tx_(bool local_ack);
+  bool is_locally_addressed_(const ScsBticinoData &frame) const;
 
   gptimer_handle_t tx_timer_{nullptr};
   volatile bool access_contended_{false};
@@ -40,6 +42,12 @@ class ScsBticinoController : public Component {
 
   ScsBticinoReceiver receiver_;
   ScsBticinoTx transmitter_;
+  struct {
+    uint8_t bus{0};
+    uint16_t address{0};
+    uint8_t system{0};
+  } identity_;
+  bool pending_local_ack_{false};
   InternalGPIOPin *rx_pin_{nullptr};
   InternalGPIOPin *tx_pin_{nullptr};
 };

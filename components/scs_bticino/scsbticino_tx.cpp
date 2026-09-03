@@ -33,6 +33,21 @@ bool ScsBticinoTx::start_next() {
   this->release_pending_ = false;
   this->expect_release_ = false;
   this->queued_ = true;
+  this->local_ack_ = false;
+  return true;
+}
+
+bool ScsBticinoTx::start_ack() {
+  if (this->queued_)
+    return false;
+  this->frame_ = ScsBticinoData::acknowledgment();
+  this->state_ = ScsTxState::IDLE;
+  this->collisions_ = 0;
+  this->attempts_ = 0;
+  this->release_pending_ = false;
+  this->expect_release_ = false;
+  this->queued_ = true;
+  this->local_ack_ = true;
   return true;
 }
 
@@ -43,12 +58,14 @@ void ScsBticinoTx::cancel() {
   this->release_pending_ = false;
   this->expect_release_ = false;
   this->queued_ = false;
+  this->local_ack_ = false;
 }
 
 bool ScsBticinoTx::complete_response(ScsTxResult *result) {
   if (!this->queued_ || this->state_ != ScsTxState::WAIT_RESPONSE || result == nullptr)
     return false;
   this->queued_ = false;
+  this->local_ack_ = false;
   *result = ScsTxResult::SUCCESS;
   return true;
 }
@@ -135,6 +152,12 @@ bool ScsBticinoTx::advance(bool rx_dominant, ScsTxStep *step, ScsTxResult *resul
     return true;
   }
   if (this->state_ == ScsTxState::END) {
+    if (this->local_ack_) {
+      this->queued_ = false;
+      this->local_ack_ = false;
+      *result = ScsTxResult::SUCCESS;
+      return false;
+    }
     if (this->type_ == ScsTxType::RESPONSE) {
       this->state_ = ScsTxState::WAIT_RESPONSE;
       emit(82 * SCS_CELL_US, false, false);
