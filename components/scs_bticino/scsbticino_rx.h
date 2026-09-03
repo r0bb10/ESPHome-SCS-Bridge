@@ -27,15 +27,12 @@ class ScsBticinoReceiver {
 
   bool setup(int gpio_num);
   bool poll(ScsBticinoData *frame);
-  bool bus_busy() const {
+  bool bus_busy();
 #ifdef USE_ESP32
-    return this->bus_busy_;
-#else
-    return false;
-#endif
+  void IRAM_ATTR on_bus_edge() {
+    this->bus_busy_ = true;
+    this->bus_edge_count_++;
   }
-#ifdef USE_ESP32
-  void IRAM_ATTR on_bus_edge() { this->bus_busy_ = true; }
 #endif
   SetupError setup_error() const { return this->setup_error_; }
 
@@ -55,6 +52,7 @@ class ScsBticinoReceiver {
   static constexpr size_t RX_BUFFER_BYTES = 10000;
   static constexpr uint32_t FILTER_US = 3;
   static constexpr uint32_t IDLE_US = 1100;
+  static constexpr uint32_t BUS_BUSY_HOLD_MS = 2;
   static constexpr size_t FILTER_SYMBOLS = 0;
   struct Capture {
     size_t symbol_count{0};
@@ -69,6 +67,9 @@ class ScsBticinoReceiver {
   volatile uint8_t capture_write_{0};
   volatile bool capture_overflow_{false};
   volatile bool bus_busy_{false};
+  volatile uint32_t bus_edge_count_{0};
+  uint32_t observed_bus_edge_count_{0};
+  uint32_t bus_busy_until_ms_{0};
   volatile esp_err_t receive_error_{ESP_OK};
 #endif
 };

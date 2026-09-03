@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "esp_err.h"
+#include "esp_timer.h"
 #include "esphome/core/log.h"
 #endif
 
@@ -72,6 +73,28 @@ bool ScsBticinoReceiver::poll(ScsBticinoData *frame) {
   this->normalize_(capture.symbols, symbol_count, &runs);
   const bool decoded = ScsBticinoCodec::decode(runs, frame);
   return decoded;
+#endif
+}
+
+bool ScsBticinoReceiver::bus_busy() {
+#ifndef USE_ESP32
+  return false;
+#else
+  if (!this->bus_busy_)
+    return false;
+
+  const uint32_t edge_count = this->bus_edge_count_;
+  const uint32_t now = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+  if (edge_count != this->observed_bus_edge_count_) {
+    this->observed_bus_edge_count_ = edge_count;
+    this->bus_busy_until_ms_ = now + BUS_BUSY_HOLD_MS;
+  }
+  if (static_cast<int32_t>(this->bus_busy_until_ms_ - now) > 0)
+    return true;
+
+  // An incomplete RMT capture must not indefinitely suppress queued TX.
+  this->bus_busy_ = false;
+  return false;
 #endif
 }
 
