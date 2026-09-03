@@ -117,7 +117,7 @@ bool ScsBticinoController::send(const ScsBticinoData &frame, ScsTxType type) {
 
 #ifdef USE_ESP32
 bool ScsBticinoController::start_queued_tx_() {
-  if (this->transmitter_.active() || !this->transmitter_.pending() || this->receiver_.bus_busy())
+  if (!this->transmitter_.ready(this->receiver_.bus_busy()))
     return false;
   if (!this->transmitter_.start_next())
     return false;

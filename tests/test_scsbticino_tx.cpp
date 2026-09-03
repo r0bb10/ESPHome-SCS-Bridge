@@ -8,8 +8,8 @@ using namespace esphome::scs_bticino;
 
 namespace {
 
-ScsBticinoData short_frame() {
-  const std::array<uint8_t, 4> payload{0x96, 0xA0, 0x6F, 0xA4};
+ScsBticinoData short_frame(uint8_t address = 0xA0) {
+  const std::array<uint8_t, 4> payload{0x96, address, 0x6F, 0xA4};
   ScsBticinoData frame;
   assert(ScsBticinoData::from_payload(frame, payload.data(), payload.size()));
   return frame;
@@ -47,6 +47,17 @@ void test_access_collision_rearbitrates() {
   assert(step.delay_us >= 150 * SCS_CELL_US);
 }
 
+void test_access_delay_uses_oem_seeded_lcg() {
+  ScsBticinoTx tx;
+  assert(tx.enqueue(short_frame(), ScsTxType::SHORT));
+  start(&tx);
+  ScsTxStep step{};
+  ScsTxResult result{};
+  assert(tx.advance(false, &step, &result));
+  // Seed 1 advances to 0x41C67EA6: 150 + 3 * (next >> 23) = 543 cells.
+  assert(step.delay_us == 543 * SCS_CELL_US);
+}
+
 void test_released_cell_collision_stops_tx() {
   ScsBticinoTx tx;
   assert(tx.enqueue(short_frame(), ScsTxType::SHORT));
@@ -65,6 +76,23 @@ void test_released_cell_collision_stops_tx() {
   assert(tx.state() == ScsTxState::WAIT_ACCESS);
   assert(!step.drive_dominant);
   assert(step.delay_us >= 150 * SCS_CELL_US);
+}
+
+void test_collision_limit_is_256() {
+  ScsBticinoTx tx;
+  assert(tx.enqueue(short_frame(), ScsTxType::SHORT));
+  start(&tx);
+  ScsTxStep step{};
+  ScsTxResult result{};
+  assert(tx.advance(false, &step, &result));
+  for (int collision = 0; collision < 255; collision++) {
+    assert(tx.advance(true, &step, &result));
+    assert(tx.active());
+    assert(tx.state() == ScsTxState::WAIT_ACCESS);
+  }
+  assert(!tx.advance(true, &step, &result));
+  assert(result == ScsTxResult::COLLISION_LIMIT);
+  assert(!tx.active());
 }
 
 void test_dominant_tx_does_not_require_echo() {
@@ -189,6 +217,53 @@ void test_queue_reserves_one_slot() {
   assert(tx.enqueue(short_frame(), ScsTxType::SHORT));
 }
 
+void test_busy_bus_defers_queue_start() {
+  ScsBticinoTx tx;
+  assert(tx.enqueue(short_frame(), ScsTxType::SHORT));
+  assert(!tx.ready(true));
+  assert(tx.ready(false));
+}
+
+void test_queue_preserves_fifo_order_and_failed_start_entry() {
+  ScsBticinoTx tx;
+  assert(tx.enqueue(short_frame(0xA0), ScsTxType::SHORT));
+  assert(tx.enqueue(short_frame(0xA1), ScsTxType::SHORT));
+
+  assert(tx.start_next());
+  assert(tx.frame().bytes[2] == 0xA0);
+  tx.cancel();  // The timer could not arm, so the active entry remains queued.
+  assert(tx.start_next());
+  assert(tx.frame().bytes[2] == 0xA0);
+  tx.confirm_started();
+  tx.cancel();
+
+  assert(tx.start_next());
+  assert(tx.frame().bytes[2] == 0xA1);
+  tx.confirm_started();
+  tx.cancel();
+  assert(!tx.pending());
+}
+
+void test_queue_wraps_without_reordering() {
+  ScsBticinoTx tx;
+  for (uint8_t address = 0; address < 31; address++)
+    assert(tx.enqueue(short_frame(address), ScsTxType::SHORT));
+
+  assert(tx.start_next());
+  assert(tx.frame().bytes[2] == 0);
+  tx.confirm_started();
+  tx.cancel();
+  assert(tx.enqueue(short_frame(31), ScsTxType::SHORT));
+
+  for (uint8_t address = 1; address < 32; address++) {
+    assert(tx.start_next());
+    assert(tx.frame().bytes[2] == address);
+    tx.confirm_started();
+    tx.cancel();
+  }
+  assert(!tx.pending());
+}
+
 void test_response_timeout() {
   ScsBticinoTx tx;
   assert(tx.enqueue(short_frame(), ScsTxType::RESPONSE));
@@ -196,9 +271,16 @@ void test_response_timeout() {
   ScsTxStep step{};
   ScsTxResult result{};
   int guard = 2000;
-  while (tx.advance(false, &step, &result) && --guard > 0) {
+  int transmissions = 0;
+  while (--guard > 0) {
+    const ScsTxState state = tx.state();
+    if (!tx.advance(false, &step, &result))
+      break;
+    if (state == ScsTxState::WAIT_ACCESS && tx.state() == ScsTxState::START && step.drive_dominant)
+      transmissions++;
   }
   assert(guard > 0);
+  assert(transmissions == 8);
   assert(result == ScsTxResult::RESPONSE_TIMEOUT);
 }
 
@@ -207,7 +289,9 @@ void test_response_timeout() {
 int main() {
   test_type_validation();
   test_access_collision_rearbitrates();
+  test_access_delay_uses_oem_seeded_lcg();
   test_released_cell_collision_stops_tx();
+  test_collision_limit_is_256();
   test_dominant_tx_does_not_require_echo();
   test_every_byte_has_a_start_bit();
   test_scheduler_emits_the_codec_frame_runs();
@@ -215,5 +299,8 @@ int main() {
   test_short_frame_completes_after_three_transmissions();
   test_cancel_makes_scheduler_available();
   test_queue_reserves_one_slot();
+  test_busy_bus_defers_queue_start();
+  test_queue_preserves_fifo_order_and_failed_start_entry();
+  test_queue_wraps_without_reordering();
   test_response_timeout();
 }
