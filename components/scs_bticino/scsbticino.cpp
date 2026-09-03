@@ -11,10 +11,12 @@
 namespace esphome::scs_bticino {
 
 static const char *const TAG = "scs_bticino";
+static const char *const TAG_RX = "scs_bticino.rx";
+static const char *const TAG_TX = "scs_bticino.tx";
 
 namespace {
 
-[[maybe_unused]] const char *tx_type_name(ScsTxType type) {
+const char *tx_type_name(ScsTxType type) {
   static constexpr const char *NAMES[] = {"response", "short", "extended", "extended_alt"};
   return NAMES[static_cast<uint8_t>(type)];
 }
@@ -45,7 +47,7 @@ void ScsBticinoController::setup() {
   }
 
   if (!this->receiver_.setup(this->rx_pin_->get_pin())) {
-    ESP_LOGE(TAG, "Unable to initialize RMT RX");
+    ESP_LOGE(TAG_RX, "Unable to initialize RMT RX");
     switch (this->receiver_.setup_error()) {
       case ScsBticinoReceiver::SetupError::CHANNEL:
         this->mark_failed(LOG_STR("RMT RX channel allocation failed"));
@@ -85,39 +87,39 @@ void ScsBticinoController::setup() {
   timer_config.intr_priority = 3;
   esp_err_t error = gptimer_new_timer(&timer_config, &this->tx_timer_);
   if (error != ESP_OK) {
-    ESP_LOGE(TAG, "gptimer_new_timer failed: %s", esp_err_to_name(error));
+    ESP_LOGE(TAG_TX, "gptimer_new_timer failed: %s", esp_err_to_name(error));
     this->mark_failed(LOG_STR("GPTimer allocation failed"));
     return;
   }
   const gptimer_event_callbacks_t timer_callbacks{.on_alarm = &ScsBticinoController::on_tx_timer_};
   error = gptimer_register_event_callbacks(this->tx_timer_, &timer_callbacks, this);
   if (error != ESP_OK) {
-    ESP_LOGE(TAG, "gptimer_register_event_callbacks failed: %s", esp_err_to_name(error));
+    ESP_LOGE(TAG_TX, "gptimer_register_event_callbacks failed: %s", esp_err_to_name(error));
     this->mark_failed(LOG_STR("GPTimer callback setup failed"));
     return;
   }
   error = gptimer_enable(this->tx_timer_);
   if (error != ESP_OK) {
-    ESP_LOGE(TAG, "gptimer_enable failed: %s", esp_err_to_name(error));
+    ESP_LOGE(TAG_TX, "gptimer_enable failed: %s", esp_err_to_name(error));
     this->mark_failed(LOG_STR("GPTimer enable failed"));
     return;
   }
   const auto rx_gpio = static_cast<gpio_num_t>(this->rx_pin_->get_pin());
   error = gpio_set_intr_type(rx_gpio, GPIO_INTR_NEGEDGE);
   if (error != ESP_OK) {
-    ESP_LOGE(TAG, "gpio_set_intr_type failed: %s", esp_err_to_name(error));
+    ESP_LOGE(TAG_RX, "gpio_set_intr_type failed: %s", esp_err_to_name(error));
     this->mark_failed(LOG_STR("GPIO interrupt type setup failed"));
     return;
   }
   error = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
   if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
-    ESP_LOGE(TAG, "gpio_install_isr_service failed: %s", esp_err_to_name(error));
+    ESP_LOGE(TAG_RX, "gpio_install_isr_service failed: %s", esp_err_to_name(error));
     this->mark_failed(LOG_STR("GPIO ISR service setup failed"));
     return;
   }
   error = gpio_isr_handler_add(rx_gpio, &ScsBticinoController::on_rx_edge_, this);
   if (error != ESP_OK) {
-    ESP_LOGE(TAG, "gpio_isr_handler_add failed: %s", esp_err_to_name(error));
+    ESP_LOGE(TAG_RX, "gpio_isr_handler_add failed: %s", esp_err_to_name(error));
     this->mark_failed(LOG_STR("GPIO ISR handler setup failed"));
   }
 #endif
@@ -130,14 +132,14 @@ bool ScsBticinoController::send(const ScsBticinoData &frame, ScsTxType type) {
   const bool extended = frame.length == SCS_EXTENDED_SIZE;
   const bool type_matches_frame = (type == ScsTxType::EXTENDED || type == ScsTxType::EXTENDED_ALT) ? extended : !extended;
   if (!frame.is_transmittable() || !type_matches_frame) {
-    ESP_LOGW(TAG, "TX reject: reason=invalid_frame_or_type type=%s", tx_type_name(type));
+    ESP_LOGW(TAG_TX, "TX reject: reason=invalid_frame_or_type type=%s", tx_type_name(type));
     return false;
   }
   if (!this->transmitter_.enqueue(frame, type)) {
-    ESP_LOGW(TAG, "TX reject: reason=queue_full depth=%u", this->transmitter_.queue_depth());
+    ESP_LOGW(TAG_TX, "TX reject: reason=queue_full depth=%u", this->transmitter_.queue_depth());
     return false;
   }
-  ESP_LOGD(TAG, "TX queue: type=%s frame=%s depth=%u", tx_type_name(type), frame.to_string().c_str(),
+  ESP_LOGD(TAG_TX, "TX queue: type=%s frame=%s depth=%u", tx_type_name(type), frame.to_string().c_str(),
            this->transmitter_.queue_depth());
   this->start_queued_tx_();
   return true;
@@ -172,7 +174,7 @@ bool ScsBticinoController::start_tx_(bool local_ack) {
   ScsTxResult result{};
   if (!this->transmitter_.advance(false, &step, &result)) {
     this->transmitter_.cancel();
-    ESP_LOGE(TAG, "TX start failed: type=%s", tx_type_name(this->transmitter_.type()));
+    ESP_LOGE(TAG_TX, "TX start failed: type=%s", tx_type_name(this->transmitter_.type()));
     return false;
   }
   gpio_set_level(static_cast<gpio_num_t>(this->tx_pin_->get_pin()), step.drive_dominant);
@@ -185,7 +187,7 @@ bool ScsBticinoController::start_tx_(bool local_ack) {
     this->pending_local_ack_ = false;
   else
     this->transmitter_.confirm_started();
-  ESP_LOGD(TAG, "TX schedule: type=%s frame=%s local_ack=%s queue=%u", tx_type_name(this->transmitter_.type()),
+  ESP_LOGD(TAG_TX, "TX schedule: type=%s frame=%s local_ack=%s queue=%u", tx_type_name(this->transmitter_.type()),
            this->transmitter_.frame().to_string().c_str(), local_ack ? "yes" : "no", this->transmitter_.queue_depth());
   return true;
 }
@@ -212,7 +214,7 @@ void IRAM_ATTR ScsBticinoController::push_tx_trace_(uint8_t kind) {
 void ScsBticinoController::drain_tx_traces_() {
   if (this->tx_trace_overflow_) {
     this->tx_trace_overflow_ = false;
-    ESP_LOGW(TAG, "TX trace overflow");
+    ESP_LOGW(TAG_TX, "TX trace overflow");
   }
   while (this->tx_trace_read_ != this->tx_trace_write_) {
     const TxTrace trace = this->tx_traces_[this->tx_trace_read_];
@@ -222,12 +224,12 @@ void ScsBticinoController::drain_tx_traces_() {
       frame.bytes[index] = trace.bytes[index];
     this->tx_trace_read_ = (this->tx_trace_read_ + 1) % TX_TRACE_CAPACITY;
     if (trace.kind == TX_TRACE_ATTEMPT) {
-      ESP_LOGI(TAG, "TX %s", frame.to_string().c_str());
-      ESP_LOGD(TAG, "TX attempt: type=%s number=%u collisions=%u local_ack=%s",
+      ESP_LOGI(TAG_TX, "TX %s", frame.to_string().c_str());
+      ESP_LOGD(TAG_TX, "TX attempt: type=%s number=%u collisions=%u local_ack=%s",
                trace.local_ack ? "local_ack" : tx_type_name(static_cast<ScsTxType>(trace.type)),
                trace.attempts, trace.collisions, trace.local_ack ? "yes" : "no");
     } else {
-      ESP_LOGD(TAG, "TX collision: frame=%s count=%u", frame.to_string().c_str(), trace.collisions);
+      ESP_LOGD(TAG_TX, "TX collision: frame=%s count=%u", frame.to_string().c_str(), trace.collisions);
     }
   }
 }
@@ -237,9 +239,9 @@ void ScsBticinoController::set_tx_defer_reason_(uint8_t reason) {
     return;
   this->tx_defer_reason_ = reason;
   if (reason == 1) {
-    ESP_LOGD(TAG, "TX defer: reason=active");
+    ESP_LOGD(TAG_TX, "TX defer: reason=active");
   } else if (reason == 2) {
-    ESP_LOGD(TAG, "TX defer: reason=bus_busy depth=%u", this->transmitter_.queue_depth());
+    ESP_LOGD(TAG_TX, "TX defer: reason=bus_busy depth=%u", this->transmitter_.queue_depth());
   }
 }
 
@@ -259,33 +261,33 @@ void ScsBticinoController::loop() {
   this->drain_tx_traces_();
   if (this->tx_timer_fault_) {
     this->tx_timer_fault_ = false;
-    ESP_LOGE(TAG, "TX timer re-arm failed: %s; transaction cancelled", esp_err_to_name(this->tx_timer_error_));
+    ESP_LOGE(TAG_TX, "TX timer re-arm failed: %s; transaction cancelled", esp_err_to_name(this->tx_timer_error_));
   }
   if (this->tx_result_ready_) {
     this->tx_result_ready_ = false;
     const char *result = tx_result_name(this->tx_result_);
     if (this->tx_result_ == ScsTxResult::SUCCESS) {
-      ESP_LOGD(TAG, "TX result: %s type=%s attempts=%u collisions=%u", result, tx_type_name(this->transmitter_.type()),
+      ESP_LOGD(TAG_TX, "TX result: %s type=%s attempts=%u collisions=%u", result, tx_type_name(this->transmitter_.type()),
                this->transmitter_.attempts(), this->transmitter_.collisions());
     } else {
-      ESP_LOGW(TAG, "TX result: %s type=%s attempts=%u collisions=%u", result, tx_type_name(this->transmitter_.type()),
+      ESP_LOGW(TAG_TX, "TX result: %s type=%s attempts=%u collisions=%u", result, tx_type_name(this->transmitter_.type()),
                this->transmitter_.attempts(), this->transmitter_.collisions());
     }
   }
   ScsBticinoData frame;
   if (this->receiver_.poll(&frame)) {
-    ESP_LOGI(TAG, "RX %s", frame.to_string().c_str());
+    ESP_LOGI(TAG_RX, "RX %s", frame.to_string().c_str());
     if (frame.is_ack() && this->transmitter_.state() == ScsTxState::WAIT_RESPONSE) {
       ScsTxResult result{};
       if (this->transmitter_.complete_response(&result)) {
         gptimer_stop(this->tx_timer_);
         this->tx_result_ = result;
         this->tx_result_ready_ = true;
-        ESP_LOGD(TAG, "RX A5: complete type-0 response");
+        ESP_LOGD(TAG_RX, "RX A5: complete type-0 response");
       }
     } else if (this->is_locally_addressed_(frame)) {
       this->pending_local_ack_ = true;
-      ESP_LOGD(TAG, "RX local address: queue A5 response");
+      ESP_LOGD(TAG_RX, "RX local address: queue A5 response");
     }
   }
   this->start_queued_tx_();
@@ -296,23 +298,23 @@ void ScsBticinoController::loop() {
 bool ScsBticinoController::arm_tx_timer_(uint64_t alarm_us) {
   esp_err_t error = gptimer_stop(this->tx_timer_);
   if (error != ESP_OK) {
-    ESP_LOGE(TAG, "TX timer stop failed: %s", esp_err_to_name(error));
+    ESP_LOGE(TAG_TX, "TX timer stop failed: %s", esp_err_to_name(error));
     return false;
   }
   error = gptimer_set_raw_count(this->tx_timer_, 0);
   if (error != ESP_OK) {
-    ESP_LOGE(TAG, "TX timer counter reset failed: %s", esp_err_to_name(error));
+    ESP_LOGE(TAG_TX, "TX timer counter reset failed: %s", esp_err_to_name(error));
     return false;
   }
   const gptimer_alarm_config_t config{.alarm_count = alarm_us, .flags = {.auto_reload_on_alarm = false}};
   error = gptimer_set_alarm_action(this->tx_timer_, &config);
   if (error != ESP_OK) {
-    ESP_LOGE(TAG, "TX timer alarm setup failed: %s", esp_err_to_name(error));
+    ESP_LOGE(TAG_TX, "TX timer alarm setup failed: %s", esp_err_to_name(error));
     return false;
   }
   error = gptimer_start(this->tx_timer_);
   if (error != ESP_OK) {
-    ESP_LOGE(TAG, "TX timer start failed: %s", esp_err_to_name(error));
+    ESP_LOGE(TAG_TX, "TX timer start failed: %s", esp_err_to_name(error));
   }
   return error == ESP_OK;
 }
