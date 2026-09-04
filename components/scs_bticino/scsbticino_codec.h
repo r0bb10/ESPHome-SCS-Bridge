@@ -13,6 +13,8 @@ static constexpr uint8_t SCS_ACK = 0xA5;
 static constexpr uint8_t SCS_STANDARD_SIZE = 7;
 static constexpr uint8_t SCS_EXTENDED_SIZE = 11;
 
+// F461/MX SCS bit timing: a 104 us cell is a 35 us dominant pulse followed by
+// 69 us released; non-final bytes add a measured 70 us released gap.
 static constexpr uint32_t SCS_CELL_US = 104;
 static constexpr uint32_t SCS_DOMINANT_US = 35;
 static constexpr uint32_t SCS_RELEASE_US = SCS_CELL_US - SCS_DOMINANT_US;

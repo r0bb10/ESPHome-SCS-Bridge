@@ -59,6 +59,8 @@ class ScsBticinoTx {
   };
 
   static constexpr uint8_t QUEUE_SLOTS = 32;
+  // F461 tx_idle (0x1ffe3a20), cross-checked against MX: type 0 gets eight
+  // response attempts; the remaining OEM types transmit three times.
   static constexpr uint8_t RETRY_LIMITS[] = {8, 3, 3, 3};
 
   ScsBticinoData frame_{};

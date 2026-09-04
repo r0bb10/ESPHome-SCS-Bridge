@@ -1,4 +1,5 @@
 #include "scsbticino_tx.h"
+#include "scsbticino_rx_policy.h"
 
 #include <array>
 #include <cassert>
@@ -10,6 +11,12 @@ namespace {
 
 ScsBticinoData short_frame(uint8_t address = 0xA0) {
   const std::array<uint8_t, 4> payload{0x96, address, 0x6F, 0xA4};
+  ScsBticinoData frame;
+  assert(ScsBticinoData::from_payload(frame, payload.data(), payload.size()));
+  return frame;
+}
+
+ScsBticinoData frame_with_payload(const std::array<uint8_t, 4> &payload) {
   ScsBticinoData frame;
   assert(ScsBticinoData::from_payload(frame, payload.data(), payload.size()));
   return frame;
@@ -322,6 +329,47 @@ void test_local_ack_transmits_once() {
   assert(!tx.active());
 }
 
+void test_rx_policy_keeps_default_identity_dormant() {
+  const ScsBticinoRxPolicy policy;
+  const auto frame = frame_with_payload({0x42, 0x00, 0x10, 0x00});
+  assert(!policy.is_locally_addressed(frame));
+  assert(policy.action_for(frame, false) == ScsBticinoRxAction::NONE);
+}
+
+void test_rx_policy_queues_local_ack_only_for_valid_match() {
+  const ScsBticinoRxPolicy policy(ScsBticinoIdentity{0, 0x42, 1});
+  const auto matching = frame_with_payload({0x42, 0x00, 0x10, 0x00});
+  const auto non_matching = frame_with_payload({0x43, 0x00, 0x10, 0x00});
+  auto malformed = matching;
+  malformed.bytes[5] ^= 0x01;
+
+  assert(policy.is_locally_addressed(matching));
+  assert(policy.action_for(matching, false) == ScsBticinoRxAction::QUEUE_LOCAL_ACK);
+  assert(!policy.is_locally_addressed(non_matching));
+  assert(policy.action_for(non_matching, false) == ScsBticinoRxAction::NONE);
+  assert(!policy.is_locally_addressed(malformed));
+  assert(policy.action_for(malformed, false) == ScsBticinoRxAction::NONE);
+}
+
+void test_rx_policy_matches_generic_system_address() {
+  const ScsBticinoRxPolicy policy(ScsBticinoIdentity{0, 0x234, 2});
+  const auto matching = frame_with_payload({0x80, 0x34, 0x22, 0x00});
+  const auto non_matching = frame_with_payload({0x80, 0x35, 0x22, 0x00});
+
+  assert(policy.is_locally_addressed(matching));
+  assert(!policy.is_locally_addressed(non_matching));
+}
+
+void test_rx_policy_completes_type_zero_only_from_inbound_ack() {
+  const ScsBticinoRxPolicy policy;
+  const ScsBticinoData ack = ScsBticinoData::acknowledgment();
+  const auto frame = short_frame();
+
+  assert(policy.action_for(ack, false) == ScsBticinoRxAction::NONE);
+  assert(policy.action_for(ack, true) == ScsBticinoRxAction::COMPLETE_RESPONSE);
+  assert(policy.action_for(frame, true) == ScsBticinoRxAction::NONE);
+}
+
 }  // namespace
 
 int main() {
@@ -343,4 +391,8 @@ int main() {
   test_response_timeout();
   test_received_ack_completes_only_waiting_response();
   test_local_ack_transmits_once();
+  test_rx_policy_keeps_default_identity_dormant();
+  test_rx_policy_queues_local_ack_only_for_valid_match();
+  test_rx_policy_matches_generic_system_address();
+  test_rx_policy_completes_type_zero_only_from_inbound_ack();
 }

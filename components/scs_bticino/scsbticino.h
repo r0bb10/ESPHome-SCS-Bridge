@@ -6,6 +6,7 @@
 #include "esphome/components/text_sensor/text_sensor.h"
 
 #include "scsbticino_rx.h"
+#include "scsbticino_rx_policy.h"
 #include "scsbticino_tx.h"
 
 #include <array>
@@ -35,7 +36,6 @@ class ScsBticinoController : public Component {
   bool arm_tx_timer_(uint64_t alarm_us);
   bool start_queued_tx_();
   bool start_tx_(bool local_ack);
-  bool is_locally_addressed_(const ScsBticinoData &frame) const;
   void IRAM_ATTR push_tx_trace_(uint8_t kind);
   void drain_tx_traces_();
   void set_tx_defer_reason_(uint8_t reason);
@@ -76,11 +76,7 @@ class ScsBticinoController : public Component {
 
   ScsBticinoReceiver receiver_;
   ScsBticinoTx transmitter_;
-  struct {
-    uint8_t bus{0};
-    uint16_t address{0};
-    uint8_t system{0};
-  } identity_;
+  ScsBticinoRxPolicy rx_policy_;
   bool pending_local_ack_{false};
   InternalGPIOPin *rx_pin_{nullptr};
   InternalGPIOPin *tx_pin_{nullptr};

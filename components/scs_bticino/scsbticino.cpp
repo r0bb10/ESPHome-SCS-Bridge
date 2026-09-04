@@ -261,15 +261,6 @@ void ScsBticinoController::set_tx_defer_reason_(uint8_t reason) {
   }
 }
 
-bool ScsBticinoController::is_locally_addressed_(const ScsBticinoData &frame) const {
-  const uint8_t system = this->identity_.system & 0x0F;
-  if (!frame.is_valid() || system == 0 || (frame.bytes[3] >> 4) != system)
-    return false;
-  if (system == 1 || system == 4)
-    return this->identity_.address == frame.bytes[1];
-  return (frame.bytes[1] & 0xF0) == 0x80 && (this->identity_.address & 0x0FFF) ==
-                                                ((frame.bytes[3] & 0x0F) << 8 | frame.bytes[2]);
-}
 #endif
 
 void ScsBticinoController::loop() {
@@ -296,7 +287,8 @@ void ScsBticinoController::loop() {
     ESP_LOGI(TAG_RX, "RX %s", frame.to_string().c_str());
     if (this->telegram_sensor_ != nullptr)
       this->telegram_sensor_->publish_state(frame.to_string());
-    if (frame.is_ack() && this->transmitter_.state() == ScsTxState::WAIT_RESPONSE) {
+    const auto action = this->rx_policy_.action_for(frame, this->transmitter_.state() == ScsTxState::WAIT_RESPONSE);
+    if (action == ScsBticinoRxAction::COMPLETE_RESPONSE) {
       ScsTxResult result{};
       if (this->transmitter_.complete_response(&result)) {
         gptimer_stop(this->tx_timer_);
@@ -305,7 +297,7 @@ void ScsBticinoController::loop() {
         this->tx_result_ready_ = true;
         ESP_LOGD(TAG_RX, "RX A5: complete type-0 response");
       }
-    } else if (this->is_locally_addressed_(frame)) {
+    } else if (action == ScsBticinoRxAction::QUEUE_LOCAL_ACK) {
       this->pending_local_ack_ = true;
       ESP_LOGD(TAG_RX, "RX local address: queue A5 response");
     }

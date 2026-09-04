@@ -150,6 +150,27 @@ void test_stretched_dominant_is_rejected() {
   assert(!ScsBticinoCodec::decode(runs, &decoded));
 }
 
+void test_dominant_jitter_within_bounds_is_accepted() {
+  auto runs = encode({0xA8, 0x96, 0xA0, 0x6F, 0xA4, 0xFD, 0xA3});
+  runs[0].duration_us = 55;
+  runs[1].duration_us = 49;
+
+  ScsBticinoData decoded;
+  assert(ScsBticinoCodec::decode(runs, &decoded));
+  assert(decoded.bytes[0] == 0xA8);
+}
+
+void test_cumulative_drift_boundary() {
+  auto accepted = encode({0xA8, 0x96, 0xA0, 0x6F, 0xA4, 0xFD, 0xA3});
+  accepted[1].duration_us += 10;
+  ScsBticinoData decoded;
+  assert(ScsBticinoCodec::decode(accepted, &decoded));
+
+  auto rejected = accepted;
+  rejected[1].duration_us += 8;
+  assert(!ScsBticinoCodec::decode(rejected, &decoded));
+}
+
 void test_recovers_after_corrupt_candidate() {
   std::vector<ScsBticinoRun> runs{{false, 20}, {true, 100}};
   const auto valid = encode({0xA8, 0x96, 0xA0, 0x6F, 0xA4, 0xFD, 0xA3});
@@ -172,5 +193,7 @@ int main() {
   test_ack();
   test_bad_checksum_is_rejected();
   test_stretched_dominant_is_rejected();
+  test_dominant_jitter_within_bounds_is_accepted();
+  test_cumulative_drift_boundary();
   test_recovers_after_corrupt_candidate();
 }

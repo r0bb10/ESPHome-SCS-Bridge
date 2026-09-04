@@ -86,12 +86,15 @@ bool ScsBticinoTx::complete_response(ScsTxResult *result) {
 }
 
 uint32_t ScsBticinoTx::access_delay_() {
+  // F461 tx_idle (0x1ffe3a20): random access is 150 + 3 * (LCG >> 23) cells.
   this->random_ = (0x41C64E6DU * this->random_ + 0x3039U) & 0x7FFFFFFFU;
   return (150U + 3U * (this->random_ >> 23)) * SCS_CELL_US;
 }
 
 bool ScsBticinoTx::collision_(ScsTxResult *result) {
   this->collisions_++;
+  // F461 collision_management (0x1ffe38e1) keeps the frame pending through
+  // 255 collisions and returns OEM result 3 on collision 256.
   if (this->collisions_ > 0xFF) {
     this->queued_ = false;
     *result = ScsTxResult::COLLISION_LIMIT;
@@ -108,6 +111,8 @@ bool ScsBticinoTx::advance(bool rx_dominant, ScsTxStep *step, ScsTxResult *resul
   if (!this->queued_ || step == nullptr || result == nullptr)
     return false;
   *result = ScsTxResult::SUCCESS;
+  // F461 collision_management only loses arbitration when RX is dominant at a
+  // local released checkpoint; a missing dominant self-echo is not a collision.
   if (this->expect_release_ && rx_dominant) {
     if (!this->collision_(result))
       return false;
@@ -126,6 +131,8 @@ bool ScsBticinoTx::advance(bool rx_dominant, ScsTxStep *step, ScsTxResult *resul
     this->byte_index_ = 0;
     this->bit_index_ = 0;
     this->state_ = ScsTxState::WAIT_ACCESS;
+    // F461 tx_idle: later type 1/2/3 transmissions use an 84-cell gap;
+    // type 0 always restarts with random access.
     emit(this->attempts_ == 1 || this->type_ == ScsTxType::RESPONSE ? this->access_delay_() : 84 * SCS_CELL_US,
          false, true);
     return true;
@@ -175,6 +182,7 @@ bool ScsBticinoTx::advance(bool rx_dominant, ScsTxStep *step, ScsTxResult *resul
     }
     if (this->type_ == ScsTxType::RESPONSE) {
       this->state_ = ScsTxState::WAIT_RESPONSE;
+      // F461 tx_wait_for_ack (0x1ffe3bbe) waits 82 SCS cells for raw A5.
       emit(82 * SCS_CELL_US, false, false);
       return true;
     }
