@@ -17,8 +17,17 @@ static const char *const TAG_TX = "scs_bticino.tx";
 namespace {
 
 const char *tx_type_name(ScsTxType type) {
-  static constexpr const char *NAMES[] = {"response", "short", "extended", "extended_alt"};
-  return NAMES[static_cast<uint8_t>(type)];
+  switch (type) {
+    case ScsTxType::RESPONSE:
+      return "response";
+    case ScsTxType::SHORT:
+      return "short";
+    case ScsTxType::EXTENDED:
+      return "extended";
+    case ScsTxType::EXTENDED_ALT:
+      return "extended_alt";
+  }
+  return "invalid";
 }
 
 const char *tx_result_name(ScsTxResult result) {

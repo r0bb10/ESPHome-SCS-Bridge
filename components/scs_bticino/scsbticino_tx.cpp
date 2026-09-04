@@ -2,9 +2,24 @@
 
 namespace esphome::scs_bticino {
 
+namespace {
+
+bool is_valid_tx_type(ScsTxType type) {
+  switch (type) {
+    case ScsTxType::RESPONSE:
+    case ScsTxType::SHORT:
+    case ScsTxType::EXTENDED:
+    case ScsTxType::EXTENDED_ALT:
+      return true;
+  }
+  return false;
+}
+
+}  // namespace
+
 bool ScsBticinoTx::enqueue(const ScsBticinoData &frame, ScsTxType type) {
   const bool extended = frame.length == SCS_EXTENDED_SIZE;
-  if (!frame.is_transmittable() ||
+  if (!is_valid_tx_type(type) || !frame.is_transmittable() ||
       (type == ScsTxType::EXTENDED || type == ScsTxType::EXTENDED_ALT ? !extended : extended))
     return false;
 

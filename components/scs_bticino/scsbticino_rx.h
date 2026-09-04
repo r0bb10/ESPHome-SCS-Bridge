@@ -62,6 +62,9 @@ class ScsBticinoReceiver {
   static_assert(RX_CAPTURE_CAPACITY > 1, "RX capture buffer needs a producer and consumer slot");
   rmt_channel_handle_t channel_{nullptr};
   rmt_receive_config_t receive_config_{};
+  // The ESP32-C3 validation target uses this as a single-producer (RMT ISR),
+  // single-consumer (ESPHome loop) ring. A dual-core target needs explicit
+  // ISR/task synchronization around publication and consumption of indices.
   std::array<Capture, RX_CAPTURE_CAPACITY> captures_{};
   volatile uint8_t capture_read_{0};
   volatile uint8_t capture_write_{0};

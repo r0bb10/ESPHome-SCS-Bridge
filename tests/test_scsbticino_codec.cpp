@@ -45,6 +45,16 @@ std::vector<ScsBticinoRun> encode_raw(const std::initializer_list<uint8_t> &byte
   return runs;
 }
 
+std::vector<ScsBticinoRun> captured_runs(const std::initializer_list<int32_t> &durations) {
+  std::vector<ScsBticinoRun> runs;
+  runs.reserve(durations.size());
+  for (const int32_t duration : durations) {
+    assert(duration != 0);
+    append_run(&runs, duration > 0, static_cast<uint32_t>(duration > 0 ? duration : -duration));
+  }
+  return runs;
+}
+
 void expect_decode(const std::initializer_list<uint8_t> &bytes) {
   const auto runs = encode(bytes);
   ScsBticinoData decoded;
@@ -56,6 +66,41 @@ void expect_decode(const std::initializer_list<uint8_t> &bytes) {
 
 void test_standard_frame() {
   expect_decode({0xA8, 0x96, 0xA0, 0x6F, 0xA4, 0xFD, 0xA3});
+}
+
+void test_standard_frame_encoding() {
+  ScsBticinoData frame;
+  const std::array<uint8_t, 7> bytes{0xA8, 0x96, 0xA0, 0x6F, 0xA4, 0xFD, 0xA3};
+  assert(ScsBticinoData::from_bytes(frame, bytes.data(), bytes.size()));
+  std::vector<ScsBticinoRun> actual;
+  assert(ScsBticinoCodec::encode(frame, &actual));
+
+  const auto expected = captured_runs({
+      -35, 69, -35, 69, -35, 69, -35, 173, -35, 173, -35, 347, -35, 69, -35, 277, -35, 173, -35,
+      69, -35, 347, -35, 69, -35, 69, -35, 69, -35, 69, -35, 69, -35, 173, -35, 347, -35, 485, -35,
+      277, -35, 243, -35, 69, -35, 69, -35, 173, -35, 69, -35, 173, -35, 347, -35, 173, -35, 867, -35,
+      277, -35, 69, -35, 69, -35, 173, -35, 277,
+  });
+  assert(actual.size() == expected.size());
+  for (size_t index = 0; index < expected.size(); index++) {
+    assert(actual[index].released == expected[index].released);
+    assert(actual[index].duration_us == expected[index].duration_us);
+  }
+}
+
+void test_live_standard_frame_capture() {
+  const auto runs = captured_runs({
+      -31, 69, -35, 70, -34, 70, -34, 173, -35, 173, -35, 346, -36, 69, -35, 277, -35, 173, -35,
+      69, -35, 346, -36, 69, -34, 70, -34, 70, -34, 70, -35, 69, -35, 172, -36, 346, -35, 485, -36,
+      276, -36, 242, -35, 69, -35, 70, -34, 173, -35, 70, -34, 173, -35, 347, -35, 173, -36, 865, -36,
+      276, -36, 69, -35, 69, -35, 173, -35, 1100,
+  });
+  ScsBticinoData decoded;
+  assert(ScsBticinoCodec::decode(runs, &decoded));
+  assert(decoded.length == 7);
+  const std::array<uint8_t, 7> expected{0xA8, 0x96, 0xA0, 0x6F, 0xA4, 0xFD, 0xA3};
+  for (size_t index = 0; index < expected.size(); index++)
+    assert(decoded.bytes[index] == expected[index]);
 }
 
 void test_rx_ignores_final_byte_but_tx_does_not() {
@@ -120,6 +165,8 @@ void test_recovers_after_corrupt_candidate() {
 
 int main() {
   test_standard_frame();
+  test_standard_frame_encoding();
+  test_live_standard_frame_capture();
   test_rx_ignores_final_byte_but_tx_does_not();
   test_extended_frame_is_never_truncated();
   test_ack();

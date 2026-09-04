@@ -55,12 +55,17 @@ class ScsBticinoController : public Component {
   };
 
   gptimer_handle_t tx_timer_{nullptr};
+  // GPIO ISR producer, GPTimer ISR consumer.
   volatile bool access_contended_{false};
+  // GPTimer completion is handed to the ESPHome loop; raw-A5 completion is
+  // produced by the loop after it stops the timer.
   volatile bool tx_result_ready_{false};
   volatile bool tx_result_local_ack_{false};
   volatile bool tx_timer_fault_{false};
   volatile ScsTxResult tx_result_{ScsTxResult::SUCCESS};
   volatile esp_err_t tx_timer_error_{ESP_OK};
+  // GPTimer ISR producer, ESPHome loop consumer. This follows the same C3
+  // single-core ownership assumption as the RX capture ring.
   std::array<TxTrace, TX_TRACE_CAPACITY> tx_traces_{};
   volatile uint8_t tx_trace_read_{0};
   volatile uint8_t tx_trace_write_{0};

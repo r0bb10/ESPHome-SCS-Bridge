@@ -31,6 +31,8 @@ void test_type_validation() {
   start(&tx);
   ScsBticinoTx extended;
   assert(!extended.enqueue(short_frame(), ScsTxType::EXTENDED));
+  ScsBticinoTx invalid;
+  assert(!invalid.enqueue(short_frame(), static_cast<ScsTxType>(4)));
 }
 
 void test_access_collision_rearbitrates() {

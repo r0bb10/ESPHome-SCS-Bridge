@@ -49,6 +49,8 @@ async def to_code(config):
     esp32.add_idf_sdkconfig_option("CONFIG_GPTIMER_ISR_HANDLER_IN_IRAM", True)
     esp32.add_idf_sdkconfig_option("CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM", True)
     esp32.add_idf_sdkconfig_option("CONFIG_RMT_RX_ISR_CACHE_SAFE", True)
+    # on_rx_done_ immediately re-arms capture with rmt_receive() from ISR context.
+    esp32.add_idf_sdkconfig_option("CONFIG_RMT_RECV_FUNC_IN_IRAM", True)
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     cg.add(var.set_rx_pin(await cg.gpio_pin_expression(config[CONF_RX_PIN])))
