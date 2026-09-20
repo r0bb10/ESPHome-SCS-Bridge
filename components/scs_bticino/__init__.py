@@ -45,6 +45,8 @@ CONFIG_SCHEMA = cv.All(
 
 
 async def to_code(config):
+    esp32.include_builtin_idf_component("esp_driver_gptimer")
+    esp32.include_builtin_idf_component("esp_driver_rmt")
     esp32.add_idf_sdkconfig_option("CONFIG_GPIO_CTRL_FUNC_IN_IRAM", True)
     esp32.add_idf_sdkconfig_option("CONFIG_GPTIMER_ISR_HANDLER_IN_IRAM", True)
     esp32.add_idf_sdkconfig_option("CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM", True)
